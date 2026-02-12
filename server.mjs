@@ -681,22 +681,6 @@ if (MASTER_TOKEN) {
     // Wizard Simples com Session em Memória para o Master
     const masterSessions = new Map(); // chatId -> { stage, data }
 
-    masterBot.command("start", (ctx) => {
-        ctx.reply(
-            "👑 <b>Painel Master SaaS</b>\n\n" +
-            "👤 /novo_cliente - Criar Tenant\n" +
-            "📋 /clientes - Listar e Ver Vencimentos\n" +
-            "💲 /preco [ID] [Valor] - Alterar Preço\n" +
-            "📅 /renovar [ID] [Dias] - Renovar Assinatura\n" +
-            "🚫 /bloquear [ID] - Bloquear Acesso",
-            { parse_mode: "HTML" }
-        );
-    });
-
-    masterBot.command("meu_id", (ctx) => {
-        ctx.reply(`🆔 Seu ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
-    });
-
     // --- MENU PRINCIPAL ---
     masterBot.command("start", (ctx) => {
         ctx.reply(
