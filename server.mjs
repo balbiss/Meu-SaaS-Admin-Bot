@@ -697,117 +697,142 @@ if (MASTER_TOKEN) {
         ctx.reply(`🆔 Seu ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
     });
 
-    // Definir Menu de Comandos do Master Bot
-    masterBot.telegram.setMyCommands([
-        { command: "novo_cliente", description: "Criar novo tenant" },
-        { command: "clientes", description: "Listar clientes e vencimentos" },
-        { command: "renovar", description: "Renovar assinatura" },
-        { command: "bloquear", description: "Bloquear acesso" },
-        { command: "meu_id", description: "Ver meu ID" }
-    ]);
+    // --- MENU PRINCIPAL ---
+    masterBot.command("start", (ctx) => {
+        ctx.reply(
+            "👑 <b>Painel Master SaaS</b>\n\nEscolha uma opção:",
+            {
+                parse_mode: "HTML",
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback("👥 Gerenciar Clientes", "list_tenants")],
+                    [Markup.button.callback("➕ Novo Cliente", "new_tenant_start")]
+                ])
+            }
+        );
+    });
 
-    // LISTAR CLIENTES
-    masterBot.command("clientes", async (ctx) => {
+    // --- LISTAR CLIENTES (Menus interativos) ---
+    masterBot.action("list_tenants", async (ctx) => {
         const { data: tenants } = await supabase.from('tenants').select('*').order('id');
 
         if (!tenants || tenants.length === 0) return ctx.reply("Nenhum cliente encontrado.");
 
-        let msg = "📋 <b>Lista de Clientes:</b>\n\n";
-        tenants.forEach(t => {
-            const status = t.is_active ? "✅" : "🚫";
-            const vcto = t.expiration_date ? new Date(t.expiration_date).toLocaleDateString('pt-BR') : "Sem data";
-            msg += `${status} <b>${t.name}</b> (ID: ${t.id})\n📅 Vence: ${vcto}\n\n`;
+        const buttons = tenants.map(t => {
+            const statusIcon = t.is_active ? "✅" : "🚫";
+            return [Markup.button.callback(`${statusIcon} ${t.name}`, `manage_tenant_${t.id}`)];
         });
-        ctx.reply(msg, { parse_mode: "HTML" });
+
+        await ctx.editMessageText("👥 <b>Selecione um Cliente:</b>", {
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard(buttons)
+        });
     });
 
-    // RENOVAR ASSINATURA
-    masterBot.command("renovar", async (ctx) => {
-        const args = ctx.message.text.split(" ");
-        const id = args[1];
-        const days = parseInt(args[2]);
+    // --- DETALHES DO CLIENTE ---
+    masterBot.action(/manage_tenant_(\d+)/, async (ctx) => {
+        const id = ctx.match[1];
+        const { data: t } = await supabase.from('tenants').select('*').eq('id', id).single();
 
-        if (!id || !days) return ctx.reply("Use: /renovar [ID] [Dias]\nEx: /renovar 1 30");
+        if (!t) return ctx.reply("Cliente não encontrado.");
 
-        // Pega data atual do tenant ou hoje
-        const { data: tenant } = await supabase.from('tenants').select('expiration_date, name').eq('id', id).single();
-        if (!tenant) return ctx.reply("Cliente não encontrado.");
+        const vcto = t.expiration_date ? new Date(t.expiration_date).toLocaleDateString('pt-BR') : "Sem data";
+        const price = t.subscription_price || 49.90;
+        const status = t.is_active ? "Ativo" : "Bloqueado";
 
-        let newDate = new Date(tenant.expiration_date || Date.now());
-        // Se já venceu, renova a partir de HOJE. Se não venceu, soma na data atual.
-        if (newDate < new Date()) newDate = new Date();
+        const msg = `🏢 <b>Cliente:</b> ${t.name}\n` +
+            `🆔 ID: ${t.id}\n` +
+            `📊 Status: ${status}\n` +
+            `💲 Preço: R$ ${price.toFixed(2)}\n` +
+            `📅 Vence em: ${vcto}`;
 
-        newDate.setDate(newDate.getDate() + days);
-
-        await supabase.from('tenants').update({ expiration_date: newDate, is_active: true }).eq('id', id);
-
-        ctx.reply(`✅ Cliente <b>${tenant.name}</b> renovado por +${days} dias.\nNovo vencimento: ${newDate.toLocaleDateString('pt-BR')}`, { parse_mode: "HTML" });
-
-        // Recarregar tenants (para aplicar a nova data na memória)
-        loadTenants();
+        await ctx.editMessageText(msg, {
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback("💲 Alterar Preço", `cmd_price_${id}`)],
+                [Markup.button.callback("📅 Renovar Assinatura", `cmd_renew_${id}`)],
+                [Markup.button.callback(t.is_active ? "🚫 Bloquear" : "✅ Desbloquear", `cmd_toggle_active_${id}`)],
+                [Markup.button.callback("🔙 Voltar", "list_tenants")]
+            ])
+        });
     });
 
-    // BLOQUEAR
-    masterBot.command("bloquear", async (ctx) => {
-        const id = ctx.message.text.split(" ")[1];
-        if (!id) return ctx.reply("Use: /bloquear [ID]");
+    // --- AÇÕES DO CLIENTE (Wizards) ---
 
-        await supabase.from('tenants').update({ is_active: false }).eq('id', id);
-        ctx.reply(`🚫 Cliente ID ${id} bloqueado.`);
+    // 1. PREÇO
+    masterBot.action(/cmd_price_(\d+)/, async (ctx) => {
+        const id = ctx.match[1];
+        masterSessions.set(ctx.chat.id, { stage: "WAIT_PRICE_VALUE", data: { id } });
+        await ctx.reply(`💲 <b>Alterar Preço (Cliente ID ${id})</b>\n\nDigite o novo valor (ex: 99.90):`, { parse_mode: "HTML" });
+    });
 
-        // Parar bot do cliente
-        if (activeBots.has(parseInt(id))) {
+    // 2. RENOVAR
+    masterBot.action(/cmd_renew_(\d+)/, async (ctx) => {
+        const id = ctx.match[1];
+        masterSessions.set(ctx.chat.id, { stage: "WAIT_RENEW_DAYS", data: { id } });
+        await ctx.reply(`📅 <b>Renovar Assinatura (Cliente ID ${id})</b>\n\nDigite quantos dias deseja adicionar (ex: 30):`, { parse_mode: "HTML" });
+    });
+
+    // 3. BLOQUEAR/DESBLOQUEAR (Toggle)
+    masterBot.action(/cmd_toggle_active_(\d+)/, async (ctx) => {
+        const id = ctx.match[1];
+        const { data: t } = await supabase.from('tenants').select('is_active, name').eq('id', id).single();
+        const newState = !t.is_active;
+
+        await supabase.from('tenants').update({ is_active: newState }).eq('id', id);
+
+        // Se bloqueou, para o bot
+        if (!newState && activeBots.has(parseInt(id))) {
             activeBots.get(parseInt(id)).stop();
             activeBots.delete(parseInt(id));
         }
+        // Se desbloqueou, teria que reiniciar (loadTenants cuida disso se reiniciar server, ou podemos forçar start aqui)
+        if (newState) {
+            const { data: updatedTenant } = await supabase.from('tenants').select('*').eq('id', id).single();
+            startTenantBot(updatedTenant);
+        }
+
+        ctx.reply(`✅ Cliente <b>${t.name}</b> foi ${newState ? "Desbloqueado" : "Bloqueado"}.`, { parse_mode: "HTML" });
+        // Retorna para lista chamando a action (trick)
+        // ctx.match = [null, "list_tenants"]; // Não funciona bem direto, melhor mandar msg nova ou editar
     });
 
-    // DEFINIR PREÇO
-    masterBot.command("preco", async (ctx) => {
-        const args = ctx.message.text.split(" ");
-        const id = args[1];
-        const price = parseFloat(args[2].replace(",", "."));
-
-        if (!id || isNaN(price)) return ctx.reply("Use: /preco [ID] [Valor]\nEx: /preco 5 99.90");
-
-        const { error } = await supabase.from('tenants').update({ subscription_price: price }).eq('id', id);
-
-        if (error) return ctx.reply(`❌ Erro: ${error.message}`);
-        ctx.reply(`✅ Preço do Cliente ID <b>${id}</b> atualizado para <b>R$ ${price.toFixed(2)}</b>`, { parse_mode: "HTML" });
-        loadTenants(); // Recarregar para atualizar memória
-    });
-
-    masterBot.command("novo_cliente", (ctx) => {
+    // --- COMANDOS INTELIGENTES (Text Handler) ---
+    masterBot.action("new_tenant_start", (ctx) => {
         masterSessions.set(ctx.chat.id, { stage: "WAIT_NAME", data: {} });
-        ctx.reply("📝 Novo Cliente\n\nQual o Nome do cliente/empresa?");
+        ctx.reply("📝 <b>Novo Cliente</b>\n\nQual o Nome do cliente/empresa?", { parse_mode: "HTML" });
     });
 
+    // --- TEXT HANDLER CENTRAL ---
     masterBot.on("text", async (ctx) => {
         const session = masterSessions.get(ctx.chat.id);
         if (!session) return;
 
+        const text = ctx.message.text.trim();
+
+        // CANCELAR
+        if (text === "/cancelar") {
+            masterSessions.delete(ctx.chat.id);
+            return ctx.reply("❌ Operação cancelada.");
+        }
+
+        // --- WIZARD: NOVO CLIENTE ---
         if (session.stage === "WAIT_NAME") {
-            session.data.name = ctx.message.text.trim();
+            session.data.name = text;
             session.stage = "WAIT_TOKEN";
             return ctx.reply("🤖 Qual o Token do Bot dele?");
         }
 
         if (session.stage === "WAIT_TOKEN") {
-            const token = ctx.message.text.trim();
-            // Validação básica de token
-            if (!token.includes(":")) return ctx.reply("❌ Token inválido. Tente novamente:");
-
-            session.data.telegram_token = token;
+            if (!text.includes(":")) return ctx.reply("❌ Token inválido. Tente novamente:");
+            session.data.telegram_token = text;
             session.stage = "WAIT_OWNER_ID";
             return ctx.reply("👤 Qual o Telegram ID (Chat ID) do Dono?\n(Ele usará isso para acessar o painel /admin)");
         }
 
         if (session.stage === "WAIT_OWNER_ID") {
-            session.data.owner_chat_id = ctx.message.text.trim();
+            session.data.owner_chat_id = text;
+            ctx.reply("⏳ Criando tenant...");
 
-            ctx.reply("⏳ Criando tenant e iniciando bot...");
-
-            // Salvar no Banco
             const { data, error } = await supabase.from('tenants').insert({
                 name: session.data.name,
                 telegram_token: session.data.telegram_token,
@@ -818,16 +843,43 @@ if (MASTER_TOKEN) {
 
             if (error) {
                 masterSessions.delete(ctx.chat.id);
-                return ctx.reply(`❌ Erro ao criar: ${error.message}`);
+                return ctx.reply(`❌ Erro: ${error.message}`);
             }
 
-            // Iniciar o bot dele imediatamente
             startTenantBot(data);
-
             masterSessions.delete(ctx.chat.id);
-            return ctx.reply(`✅ <b>Sucesso!</b>\n\nCliente <b>${data.name}</b> criado.\nBot iniciado: @${(await new Telegraf(data.telegram_token).telegram.getMe()).username}\n\nO dono já pode acessar o /admin.`);
+            return ctx.reply(`✅ <b>Sucesso!</b>\nCliente <b>${data.name}</b> criado.`);
+        }
+
+        // --- WIZARD: ALTERAR PREÇO ---
+        if (session.stage === "WAIT_PRICE_VALUE") {
+            const price = parseFloat(text.replace(",", "."));
+            if (isNaN(price)) return ctx.reply("❌ Valor inválido. Digite um número (ex: 99.90).");
+
+            await supabase.from('tenants').update({ subscription_price: price }).eq('id', session.data.id);
+            masterSessions.delete(ctx.chat.id);
+            loadTenants();
+            return ctx.reply(`✅ Preço atualizado para <b>R$ ${price.toFixed(2)}</b>`, { parse_mode: "HTML" });
+        }
+
+        // --- WIZARD: RENOVAR ---
+        if (session.stage === "WAIT_RENEW_DAYS") {
+            const days = parseInt(text);
+            if (isNaN(days)) return ctx.reply("❌ Valor inválido. Digite um número inteiro (ex: 30).");
+
+            const { data: tenant } = await supabase.from('tenants').select('*').eq('id', session.data.id).single();
+            let newDate = new Date(tenant.expiration_date || Date.now());
+            if (newDate < new Date()) newDate = new Date();
+            newDate.setDate(newDate.getDate() + days);
+
+            await supabase.from('tenants').update({ expiration_date: newDate, is_active: true }).eq('id', session.data.id);
+            masterSessions.delete(ctx.chat.id);
+            loadTenants();
+            return ctx.reply(`✅ Renovado por +${days} dias.\nNovo vencimento: <b>${newDate.toLocaleDateString("pt-BR")}</b>`, { parse_mode: "HTML" });
         }
     });
+
+    masterBot.command("meu_id", (ctx) => ctx.reply(`🆔 Seu ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" }));
 
     masterBot.launch().then(() => log("👑 Master Bot Online!", "SYSTEM"));
 }
