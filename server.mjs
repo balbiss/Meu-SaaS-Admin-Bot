@@ -735,6 +735,10 @@ async function startTenantBot(tenant) {
                     }, newInstId); // Usa newInstId como token
 
                     // 3. Salvar na Sessão (Estado: DISCONNECTED / CONNECTING)
+                    const session = await getSession(ctx.tenant.id, ctx.chat.id);
+                    if (!session.whatsapp) session.whatsapp = { instances: [] };
+                    if (!session.whatsapp.instances) session.whatsapp.instances = [];
+
                     const newInstance = {
                         id: newInstId, // Token e ID são o mesmo
                         wuzapiId: createRes.data?.id || newInstId,
