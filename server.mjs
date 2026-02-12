@@ -128,8 +128,7 @@ async function generateSubscriptionCharge(tenant) {
     if (!MASTER_SYNCPAY_ID || !MASTER_SYNCPAY_SECRET) {
         throw new Error("Sistema de cobrança não configurado pelo Admin Mestre.");
     }
-
-    const price = tenant.subscription_price || 49.90; // Preço Personalizado ou Padrão
+    const price = tenant.subscription_price || 90.90; // Preço Personalizado ou Padrão (90.90)
     const expiryMinutes = 60; // 1 hora para pagar
 
     // 1. Auth no SyncPay (Como MESTRE)
@@ -439,7 +438,7 @@ async function startTenantBot(tenant) {
             // Envia Copia e Cola
             await ctx.reply(
                 `💰 <b>Renovação de Assinatura</b>\n` +
-                `Valor: R$ 49,90\n` +
+                `Valor: R$ ${charge.value.toFixed(2).replace('.', ',')}\n` +
                 `Cliente: <b>${ctx.tenant.name}</b>\n\n` +
                 `Copie o código abaixo e pague no seu banco:`,
                 { parse_mode: "HTML" }
@@ -721,7 +720,7 @@ if (MASTER_TOKEN) {
         if (!t) return ctx.reply(`Cliente não encontrado (ID: ${id}).`);
 
         const vcto = t.expiration_date ? new Date(t.expiration_date).toLocaleDateString('pt-BR') : "Sem data";
-        const price = t.subscription_price || 49.90;
+        const price = t.subscription_price || 90.90;
         const status = t.is_active ? "Ativo" : "Bloqueado";
 
         const msg = `🏢 <b>Cliente:</b> ${t.name}\n` +
