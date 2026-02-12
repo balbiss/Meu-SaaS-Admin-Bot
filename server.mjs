@@ -26,9 +26,15 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // -- Configurações Globais (Serviços Compartilhados) --
-const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const DEFAULT_MODEL = "gpt-4o-mini";
+
+// Helper para pegar a instância da OpenAI correta
+function getOpenAI(tenant) {
+    const apiKey = tenant.openai_api_key || process.env.OPENAI_API_KEY;
+    if (!apiKey) return null;
+    return new OpenAI({ apiKey });
+}
+
 const WUZAPI_BASE_URL = process.env.WUZAPI_BASE_URL || "http://localhost:8080";
 const WUZAPI_ADMIN_TOKEN = process.env.WUZAPI_ADMIN_TOKEN;
 const WEBHOOK_BASE = process.env.WEBHOOK_URL || `http://localhost:${PORT}/webhook`;
@@ -143,9 +149,212 @@ async function startTenantBot(tenant) {
         return next();
     });
 
-    // ... (Owner Dashboard code remains same) ...
+    // --- OWNER DASHBOARD ---
+    const isOwner = (ctx) => String(ctx.chat.id) === String(ctx.tenant.owner_chat_id);
 
-    // --- (Rest of startTenantBot remains same) ---
+    async function renderOwnerDashboard(ctx) {
+        if (!isOwner(ctx)) return;
+
+        const tenant = ctx.tenant;
+        const status = tenant.is_active ? "✅ Ativo" : "❌ Inativo";
+        const syncPayStatus = (tenant.syncpay_client_id && tenant.syncpay_client_secret) ? "✅ Configurado" : "⚠️ Pendente";
+
+        // Status da IA
+        const aiKeyStatus = tenant.openai_api_key ? "✅ Própria" : "⚠️ Sistema (Padrão)";
+        const aiModel = tenant.openai_model || DEFAULT_MODEL;
+
+        const text = `👑 <b>Painel do Dono (${tenant.name})</b>\n\n` +
+            `📊 <b>Status:</b> ${status}\n` +
+            `💳 <b>Pagamento (SyncPay):</b> ${syncPayStatus}\n` +
+            `🧠 <b>Inteligência Artificial:</b>\n` +
+            `   ├ Key: ${aiKeyStatus}\n` +
+            `   └ Modelo: ${aiModel}\n` +
+            `🔑 <b>Token Bot:</b> ...${tenant.telegram_token.slice(-5)}\n\n` +
+            `<i>Configure suas credenciais abaixo:</i>`;
+
+        const buttons = [
+            [Markup.button.callback("💳 Configurar SyncPay", "owner_setup_syncpay")],
+            [Markup.button.callback("🧠 Configurar IA", "owner_setup_ai")],
+            [Markup.button.callback("🔄 Recarregar Bot", "owner_reload_bot")]
+        ];
+
+        await ctx.reply(text, { parse_mode: "HTML", ...Markup.inlineKeyboard(buttons) });
+    }
+
+    bot.command("admin", async (ctx) => {
+        if (!isOwner(ctx)) return ctx.reply("⛔ Acesso restrito ao dono do bot.");
+        await renderOwnerDashboard(ctx);
+    });
+
+    bot.action("owner_menu", async (ctx) => {
+        if (!isOwner(ctx)) return;
+        await ctx.answerCbQuery();
+        await renderOwnerDashboard(ctx);
+    });
+
+    // --- SETUP SYNCPAY ---
+    bot.action("owner_setup_syncpay", async (ctx) => {
+        if (!isOwner(ctx)) return;
+        ctx.session.stage = "OWNER_WAIT_SYNCPAY_ID";
+        await ctx.save();
+        await ctx.reply("💳 <b>Configuração SyncPay (Passo 1/2)</b>\n\nPor favor, envie o seu <b>Client ID</b> da SyncPay:", { parse_mode: "HTML" });
+    });
+
+    // --- SETUP IA ---
+    bot.action("owner_setup_ai", async (ctx) => {
+        if (!isOwner(ctx)) return;
+        ctx.session.stage = "OWNER_WAIT_OPENAI_KEY";
+        await ctx.save();
+        await ctx.reply(
+            "🧠 <b>Configuração de IA</b>\n\n" +
+            "Envie a sua <b>API Key da OpenAI</b> (começa com sk-...).\n" +
+            "Se quiser cancelar e manter a atual, envie /cancelar.",
+            { parse_mode: "HTML" }
+        );
+    });
+
+    bot.action("owner_reload_bot", async (ctx) => {
+        if (!isOwner(ctx)) return;
+        await ctx.answerCbQuery("🔄 Reiniciando...", { show_alert: true });
+        // Recarrega do banco para pegar mudanças de API Key/Model confirmadas
+        try {
+            const { data } = await supabase.from('tenants').select('*').eq('id', tenant.id).single();
+            if (data) {
+                Object.assign(tenant, data); // Atualiza objeto em memória
+                await ctx.reply("✅ Configurações recarregadas com sucesso!");
+                return renderOwnerDashboard(ctx);
+            }
+        } catch (e) {
+            await ctx.reply("❌ Erro ao recarregar.");
+        }
+    });
+
+    // Capture Text Handling for Wizard
+    bot.on("text", async (ctx, next) => {
+        if (!isOwner(ctx)) return next();
+
+        if (ctx.message.text === "/cancelar") {
+            ctx.session.stage = "READY";
+            await ctx.save();
+            return renderOwnerDashboard(ctx);
+        }
+
+        const stage = ctx.session.stage;
+
+        // --- SYNCPAY FLOW ---
+        if (stage === "OWNER_WAIT_SYNCPAY_ID") {
+            ctx.session.temp_sync_id = ctx.message.text.trim();
+            ctx.session.stage = "OWNER_WAIT_SYNCPAY_SECRET";
+            await ctx.save();
+            return ctx.reply("💳 <b>Passo 2/2</b>\n\nAgora envie o seu <b>Client Secret</b> da SyncPay:", { parse_mode: "HTML" });
+        }
+
+        if (stage === "OWNER_WAIT_SYNCPAY_SECRET") {
+            const secret = ctx.message.text.trim();
+            const clientId = ctx.session.temp_sync_id;
+
+            // Salvar no Banco SaaS (Tabela tenants)
+            const { error } = await supabase
+                .from('tenants')
+                .update({
+                    syncpay_client_id: clientId,
+                    syncpay_client_secret: secret
+                })
+                .eq('id', ctx.tenant.id);
+
+            if (error) return ctx.reply(`❌ Erro: ${error.message}`);
+
+            ctx.session.stage = "READY";
+            ctx.session.temp_sync_id = null;
+            await ctx.save();
+
+            // Atualizar memória
+            ctx.tenant.syncpay_client_id = clientId;
+            ctx.tenant.syncpay_client_secret = secret;
+
+            await ctx.reply("✅ SyncPay configurado!", { parse_mode: "HTML" });
+            return renderOwnerDashboard(ctx);
+        }
+
+        // --- OPENAI FLOW ---
+        if (stage === "OWNER_WAIT_OPENAI_KEY") {
+            const key = ctx.message.text.trim();
+            if (!key.startsWith("sk-")) return ctx.reply("❌ Key inválida. Deve começar com 'sk-'. Tente novamente ou /cancelar.");
+
+            // Salva a Key e pergunta o modelo
+            ctx.session.temp_openai_key = key;
+            ctx.session.stage = "OWNER_WAIT_OPENAI_MODEL";
+            await ctx.save();
+
+            const buttons = [
+                [Markup.button.callback("GPT-4o Mini (Padrão)", "set_model_4o_mini")],
+                [Markup.button.callback("GPT-4o (Potente)", "set_model_4o")],
+                [Markup.button.callback("GPT-3.5 Turbo (Antigo)", "set_model_35")]
+            ];
+
+            return ctx.reply("🤖 <b>Escolha o Modelo de IA:</b>", { parse_mode: "HTML", ...Markup.inlineKeyboard(buttons) });
+        }
+
+        return next();
+    });
+
+    // --- MODEL SELECTION ACTIONS ---
+    const saveModel = async (ctx, modelName) => {
+        const key = ctx.session.temp_openai_key;
+        if (!key) return ctx.reply("❌ Sessão expirada. Comece de novo.");
+
+        const { error } = await supabase
+            .from('tenants')
+            .update({
+                openai_api_key: key,
+                openai_model: modelName
+            })
+            .eq('id', ctx.tenant.id);
+
+        if (error) return ctx.reply(`❌ Erro ao salvar: ${error.message}`);
+
+        ctx.session.stage = "READY";
+        ctx.session.temp_openai_key = null;
+        await ctx.save();
+
+        // Atualizar memória
+        ctx.tenant.openai_api_key = key;
+        ctx.tenant.openai_model = modelName;
+
+        await ctx.reply(`✅ <b>IA Configurada!</b>\nModelo: ${modelName}`, { parse_mode: "HTML" });
+        return renderOwnerDashboard(ctx);
+    };
+
+    bot.action("set_model_4o_mini", (ctx) => saveModel(ctx, "gpt-4o-mini"));
+    bot.action("set_model_4o", (ctx) => saveModel(ctx, "gpt-4o"));
+    bot.action("set_model_35", (ctx) => saveModel(ctx, "gpt-3.5-turbo"));
+
+
+    bot.start(async (ctx) => {
+        const userFirstName = ctx.from.first_name || "Usuário";
+        const welcomeMsg = `👋 <b>Olá, ${userFirstName}!</b>\n\n` +
+            `Bem-vindo ao sistema de automação de <b>${ctx.tenant.name}</b>.\n` +
+            `\n🆔 Seu ID: <code>${ctx.chat.id}</code>` +
+            `\n🏢 Tenant: ${ctx.tenant.name}`;
+
+        await ctx.reply(welcomeMsg, { parse_mode: "HTML" });
+    });
+
+    bot.command("id", (ctx) => {
+        ctx.reply(`🆔 ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
+    });
+
+    // Aqui você adicionaria toda a lógica original do seu bot (Wuzapi, Menus, etc)
+    // Adaptada para usar ctx.tenant e ctx.session
+    // ...
+
+    bot.launch().then(() => {
+        log(`Bot Online! 🚀`, tenant.name);
+    }).catch(err => {
+        log(`Erro ao iniciar bot: ${err.message}`, tenant.name);
+    });
+
+    activeBots.set(tenant.id, bot);
 }
 
 // -- Loaders --
@@ -201,15 +410,24 @@ const MASTER_ADMIN_ID = process.env.MASTER_ADMIN_ID;
 if (MASTER_TOKEN) {
     const masterBot = new Telegraf(MASTER_TOKEN);
 
-    // Middleware de Segurança ... (mantém igual) ...
+    // Middleware de Segurança (Só você pode usar)
     masterBot.use((ctx, next) => {
+        // Permitir descobrir o ID mesmo sem configurar
         if (ctx.message?.text === '/meu_id') return next();
-        if (!MASTER_ADMIN_ID) return ctx.reply("⚠️ ADMIN_ID não configurado.");
-        if (String(ctx.chat.id) !== String(MASTER_ADMIN_ID)) return;
+
+        // Se MASTER_ADMIN_ID não estiver configurado, avisa no log e ignora
+        if (!MASTER_ADMIN_ID) {
+            return ctx.reply("⚠️ ADMIN_ID não configurado no .env. Configure para usar este bot.\nUse /meu_id para descobrir o seu.");
+        }
+        if (String(ctx.chat.id) !== String(MASTER_ADMIN_ID)) {
+            log(`Acesso negado ao Master Bot: ${ctx.chat.id}`, "SECURITY");
+            return;
+        }
         return next();
     });
 
-    const masterSessions = new Map();
+    // Wizard Simples com Session em Memória para o Master
+    const masterSessions = new Map(); // chatId -> { stage, data }
 
     masterBot.command("start", (ctx) => {
         ctx.reply(
@@ -299,35 +517,38 @@ if (MASTER_TOKEN) {
 
         if (session.stage === "WAIT_TOKEN") {
             const token = ctx.message.text.trim();
-            if (!token.includes(":")) return ctx.reply("❌ Token inválido.");
+            // Validação básica de token
+            if (!token.includes(":")) return ctx.reply("❌ Token inválido. Tente novamente:");
+
             session.data.telegram_token = token;
             session.stage = "WAIT_OWNER_ID";
-            return ctx.reply("👤 Qual o Telegram ID do Dono?");
+            return ctx.reply("👤 Qual o Telegram ID (Chat ID) do Dono?\n(Ele usará isso para acessar o painel /admin)");
         }
 
         if (session.stage === "WAIT_OWNER_ID") {
             session.data.owner_chat_id = ctx.message.text.trim();
-            ctx.reply("⏳ Criando...");
 
-            const expirationDate = new Date();
-            expirationDate.setDate(expirationDate.getDate() + 30); // 30 dias grátis
+            ctx.reply("⏳ Criando tenant e iniciando bot...");
 
+            // Salvar no Banco
             const { data, error } = await supabase.from('tenants').insert({
                 name: session.data.name,
                 telegram_token: session.data.telegram_token,
                 owner_chat_id: session.data.owner_chat_id,
                 is_active: true,
-                expiration_date: expirationDate
+                expiration_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
             }).select().single();
 
             if (error) {
                 masterSessions.delete(ctx.chat.id);
-                return ctx.reply(`Erro: ${error.message}`);
+                return ctx.reply(`❌ Erro ao criar: ${error.message}`);
             }
 
+            // Iniciar o bot dele imediatamente
             startTenantBot(data);
+
             masterSessions.delete(ctx.chat.id);
-            return ctx.reply(`✅ Criado! Vence em: ${expirationDate.toLocaleDateString('pt-BR')}`);
+            return ctx.reply(`✅ <b>Sucesso!</b>\n\nCliente <b>${data.name}</b> criado.\nBot iniciado: @${(await new Telegraf(data.telegram_token).telegram.getMe()).username}\n\nO dono já pode acessar o /admin.`);
         }
     });
 
