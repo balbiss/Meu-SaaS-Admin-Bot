@@ -94,12 +94,18 @@ async function getSession(tenantId, chatId) {
         sessionObj = data.data;
         // Auto-healing properties
         if (!sessionObj.whatsapp) sessionObj.whatsapp = { instances: [], maxInstances: 1 };
+        if (!sessionObj.affiliate) sessionObj.affiliate = { balance: 0, totalEarned: 0, referralsCount: 0 };
         if (!sessionObj.stage) sessionObj.stage = "READY";
     } else {
         sessionObj = {
             stage: "START",
             isVip: false,
             whatsapp: { instances: [], maxInstances: 1 },
+            affiliate: {
+                balance: 0,
+                totalEarned: 0,
+                referralsCount: 0
+            },
             reports: {}
         };
         await saveSession(tenantId, chatId, sessionObj);
@@ -319,6 +325,7 @@ async function startTenantBot(tenant) {
         const buttons = [
             [Markup.button.callback("💳 Configurar SyncPay", "owner_setup_syncpay")],
             [Markup.button.callback("🧠 Configurar IA", "owner_setup_ai")],
+            [Markup.button.callback("🎭 Personalizar Prompt", "owner_setup_prompt")],
             [Markup.button.callback("💸 Renovar Assinatura", "owner_renew_sub")],
             [Markup.button.callback("🔄 Recarregar Bot", "owner_reload_bot")]
         ];
@@ -354,6 +361,20 @@ async function startTenantBot(tenant) {
             "⚠️ <b>Atenção:</b> Para a IA funcionar, você precisa usar a <b>SUA</b> API Key.\n\n" +
             "Envie agora a sua chave (começa com sk-...).\n" +
             "Se não enviar, a inteligência do bot ficará desligada.",
+            { parse_mode: "HTML" }
+        );
+    });
+
+    // --- SETUP PROMPT ---
+    bot.action("owner_setup_prompt", async (ctx) => {
+        if (!isOwner(ctx)) return;
+        ctx.session.stage = "OWNER_WAIT_PROMPT";
+        await ctx.save();
+        await ctx.reply(
+            "🎭 <b>Personalizar Personalidade (Prompt)</b>\n\n" +
+            "Como você quer que o bot aja? (Vendedor, Suporte, Amigo...)\n\n" +
+            "<i>Atual:</i> " + (ctx.tenant.system_prompt || 'Padrão') + "\n\n" +
+            "Envie o novo texto de instrução agora:",
             { parse_mode: "HTML" }
         );
     });
@@ -450,6 +471,22 @@ async function startTenantBot(tenant) {
             return ctx.reply("🤖 <b>Escolha o Modelo de IA:</b>", { parse_mode: "HTML", ...Markup.inlineKeyboard(buttons) });
         }
 
+        // --- PROMPT FLOW ---
+        if (stage === "OWNER_WAIT_PROMPT") {
+            const prompt = ctx.message.text.trim();
+
+            const { error } = await supabase.from('tenants').update({ system_prompt: prompt }).eq('id', ctx.tenant.id);
+
+            if (error) return ctx.reply(`❌ Erro: ${error.message}`);
+
+            ctx.tenant.system_prompt = prompt; // Atualiza memória rápida
+            ctx.session.stage = "READY";
+            await ctx.save();
+
+            await ctx.reply("✅ <b>Personalidade definida!</b>\nA IA agora seguirá suas novas instruções.", { parse_mode: "HTML" });
+            return renderOwnerDashboard(ctx);
+        }
+
         return next();
     });
 
@@ -515,14 +552,47 @@ async function startTenantBot(tenant) {
     bot.action("set_model_35", (ctx) => saveModel(ctx, "gpt-3.5-turbo"));
 
 
-    bot.start(async (ctx) => {
-        const userFirstName = ctx.from.first_name || "Usuário";
-        const welcomeMsg = `👋 <b>Olá, ${userFirstName}!</b>\n\n` +
-            `Bem-vindo ao sistema de automação de <b>${ctx.tenant.name}</b>.\n` +
-            `\n🆔 Seu ID: <code>${ctx.chat.id}</code>` +
-            `\n🏢 Tenant: ${ctx.tenant.name}`;
+    // --- END USER DASHBOARD ---
+    async function renderUserMenu(ctx) {
+        const session = await getSession(ctx.tenant.id, ctx.chat.id);
+        const userFirstName = ctx.from.first_name || "Parceiro";
 
-        await ctx.reply(welcomeMsg, { parse_mode: "HTML" });
+        const text = `👋 <b>Olá, ${userFirstName}! Bem-vindo ao Sistema</b> 🚀\n\n` +
+            `Automação de WhatsApp com IA e Rodízio de Leads.\n\n` +
+            `👇 <b>Escolha uma opção no menu abaixo:</b>`;
+
+        const buttons = [
+            [Markup.button.callback("🚀 Minhas Instâncias", "cmd_instancias_menu")],
+            [Markup.button.callback("📢 Disparo em Massa", "cmd_shortcuts_disparos"), Markup.button.callback("🤝 Afiliados", "cmd_afiliados")],
+            [Markup.button.callback("💎 Seu Plano (Ativo)", "cmd_planos_menu"), Markup.button.callback("👤 Suporte / Ajuda", "cmd_suporte")]
+        ];
+
+        // Se tiver tutoriais configurados no futuro
+        // buttons.push([Markup.button.callback("📺 Área de Tutoriais", "cmd_tutoriais")]);
+
+        if (String(ctx.chat.id) === String(ctx.tenant.owner_chat_id)) {
+            buttons.push([Markup.button.callback("👑 Painel Admin (Dono)", "owner_menu")]);
+        }
+
+        await ctx.reply(text, { parse_mode: "HTML", ...Markup.inlineKeyboard(buttons) });
+    }
+
+    // --- USER ACTIONS PLACEHOLDERS ---
+    bot.action("cmd_instancias_menu", (ctx) => ctx.reply("🚀 Menu de Instâncias em breve!"));
+    bot.action("cmd_shortcuts_disparos", (ctx) => ctx.reply("📢 Menu de Disparos em breve!"));
+    bot.action("cmd_afiliados", (ctx) => ctx.reply("🤝 Área de Afiliados em breve!"));
+    bot.action("cmd_planos_menu", (ctx) => ctx.reply("💎 Área de Planos em breve!"));
+    bot.action("cmd_suporte", (ctx) => ctx.reply("👤 Suporte em breve!"));
+
+    bot.start(async (ctx) => {
+        // Se for o dono, mostra o menu de usuário mas com opção de ir pro Admin
+        await renderUserMenu(ctx);
+    });
+
+    // Mantido comando /admin direto
+    bot.command("admin", async (ctx) => {
+        if (!isOwner(ctx)) return ctx.reply("⛔ Acesso restrito ao dono do bot.");
+        await renderOwnerDashboard(ctx);
     });
 
     bot.command("id", (ctx) => {
@@ -550,6 +620,7 @@ async function startTenantBot(tenant) {
         }
 
         const model = ctx.tenant.openai_model || DEFAULT_MODEL;
+        const systemPrompt = ctx.tenant.system_prompt || "Você é um assistente útil e inteligente.";
 
         try {
             await ctx.sendChatAction("typing");
@@ -557,7 +628,7 @@ async function startTenantBot(tenant) {
             const response = await openai.chat.completions.create({
                 model: model,
                 messages: [
-                    { role: "system", content: "Você é um assistente útil e inteligente." },
+                    { role: "system", content: systemPrompt },
                     { role: "user", content: ctx.message.text }
                 ],
             });
