@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect WhatsApp - Conexão</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #09090b;
+            --card: #18181b;
+            --primary: #8b5cf6;
+            --text: #fafafa;
+            --muted: #a1a1aa;
+            --border: #27272a;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background-color: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        h1 {
+            font-size: 20px;
+            margin-bottom: 24px;
+        }
+
+        .qr-container {
+            background: #fff;
+            padding: 16px;
+            border-radius: 12px;
+            margin: 0 auto 24px;
+            width: 260px;
+            height: 260px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .qr-container img {
+            max-width: 100%;
+            display: block;
+        }
+
+        .status {
+            font-size: 14px;
+            color: var(--muted);
+            margin-bottom: 24px;
+        }
+
+        .loader {
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--border);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .instructions {
+            text-align: left;
+            font-size: 13px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.03);
+            padding: 16px;
+            border-radius: 8px;
+        }
+
+        .instructions ol {
+            margin: 8px 0 0;
+            padding-left: 20px;
+        }
+
+        .instructions li {
+            margin-bottom: 4px;
+        }
+
+        .connected-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--card);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+        }
+
+        .connected-overlay.active {
+            display: flex;
+        }
+
+        .check-icon {
+            font-size: 48px;
+            color: #22c55e;
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="logo">🚀 Connect Pro</div>
+        <h1>Conectar WhatsApp</h1>
+
+        <div class="qr-container" id="qr-box">
+            <div class="loader" id="loader"></div>
+            <img id="qr-img" style="display:none">
+            <div class="connected-overlay" id="done-box">
+                <div class="check-icon">✅</div>
+                <div style="font-weight:600">Conectado!</div>
+            </div>
+        </div>
+
+        <div class="status" id="status-text">Aguardando QR Code...</div>
+
+        <div class="instructions">
+            <strong>Instruções:</strong>
+            <ol>
+                <li>Abra o WhatsApp no seu celular.</li>
+                <li>Toque em <strong>Configurações</strong> ou <strong>Menu</strong>.</li>
+                <li>Selecione <strong>Aparelhos Conectados</strong>.</li>
+                <li>Toque em <strong>Conectar um Aparelho</strong> e aponte a câmera para este código.</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const id = params.get('id');
+
+        if (!id) {
+            document.getElementById('status-text').innerText = 'Erro: ID da instância não fornecido.';
+            document.getElementById('loader').style.display = 'none';
+        } else {
+            const poll = async () => {
+                try {
+                    // Chamamos o proxy local para o QR
+                    const res = await fetch(`/api/instance/${id}/qr-proxy`);
+                    const data = await res.json();
+
+                    if (data.qrImage) {
+                        document.getElementById('loader').style.display = 'none';
+                        const img = document.getElementById('qr-img');
+                        img.src = data.qrImage;
+                        img.style.display = 'block';
+                        document.getElementById('status-text').innerText = 'Escaneie o código acima.';
+                    }
+
+                    // Checamos status
+                    const sRes = await fetch(`/api/instance/${id}/status-proxy`);
+                    const sData = await sRes.json();
+                    if (sData.status === 'CONNECTED') {
+                        document.getElementById('done-box').classList.add('active');
+                        document.getElementById('status-text').innerText = 'Sucesso! Você já pode fechar esta aba.';
+                        return; // Para o polling
+                    }
+                } catch (e) {
+                    console.error('Erro no polling:', e);
+                }
+                setTimeout(poll, 5000);
+            };
+            poll();
+        }
+    </script>
+</body>
+
+</html>

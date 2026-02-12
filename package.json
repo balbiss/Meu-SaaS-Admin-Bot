@@ -1,0 +1,22 @@
+{
+  "name": "lovable-agent-server",
+  "version": "1.190",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.95.3",
+    "cors": "^2.8.5",
+    "diff": "^5.2.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "openai": "^4.0.0",
+    "pdf-parse": "^2.4.5",
+    "puppeteer": "^24.37.1",
+    "qrcode": "^1.5.4",
+    "telegraf": "^4.16.3"
+  }
+}

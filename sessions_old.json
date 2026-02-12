@@ -1,0 +1,59 @@
+{
+  "7924857149": {
+    "stage": "READY",
+    "isVip": true,
+    "subscriptionExpiry": "2026-03-07T14:50:42.182Z",
+    "weight": 63,
+    "height": 1,
+    "goal": null,
+    "gender": null,
+    "age": null,
+    "history": [
+      {
+        "role": "user",
+        "content": "Estou com 63 k preciso ganhar massa muscular pra fica com 70k em 60 dias tem como?"
+      },
+      {
+        "role": "assistant",
+        "content": "Com certeza, dá pra você ganhar massa muscular em 60 dias! 💪🏼 Você só precisa de um treino focado e uma alimentação adequada. Vamos focar em um treino que vai ajudar você a ganhar força e massa. Aqui está uma rotina completa de treino para 5 dias da semana:\n\n**Treino A: Peito e Tríceps**\n1. Supino reto - 4x8-10\n2. Supino inclinado com halteres - 3x10-12\n3. Flexões - 3x até a falha\n4. Tríceps na polia - 3x10-12\n5. Mergulho (Dips) - 3x até a falha\n\n**Treino B: Costas e Bíceps**\n1. Puxada na frente - 4x8-10\n2. Remada curvada - 3x10-12\n3. Pull-up (barra fixa) - 3x até a falha\n4. Rosca direta - 3x10-12\n5. Rosca martelo - 3x10-12\n\n**Treino C: Pernas**\n1. Agachamento - 4x8-10\n2. Leg Press - 3x10-12\n3. Cadeira extensora - 3x10-12\n4. Cadeira flexora - 3x10-12\n5. Panturrilha em pé - 4x até a falha\n\n**Treino D: Ombros e Abdômen**\n1. Desenvolvimento de ombro - 4x8-10\n2. Elevação lateral - 3x10-12\n3. Elevação frontal - 3x10-12\n4. Prancha - 3x30-60 seg\n5. Abdominal na bola - 3x até a falha\n\n**Treino E: Cardio e Mobilidade**\n1. 30 min de corrida ou bicicleta\n2. Alongamentos e exercícios de mobilidade\n\n**Dicas Extras:**\n- Faça um bom aquecimento antes dos treinos.\n- Mantenha uma alimentação rica em proteínas e calorias para apoiar seu ganho muscular, como carnes, ovos, grãos e vegetais.\n\nSe precisar de uma dieta mais detalhada e personalizada, tem o plano VIP que pode te ajudar ainda mais! Vamos nessa? 🚀"
+      },
+      {
+        "role": "user",
+        "content": "Já"
+      },
+      {
+        "role": "assistant",
+        "content": "Ótimo! Agora, vamos focar em algumas dicas práticas para otimizar ainda mais os seus resultados:\n\n1. **Alimentação:**\n   - **Proteínas:** Priorize a ingestão de carne magra, ovos, laticínios e leguminosas.\n   - **Carboidratos:** Inclua batata, arroz, quinoa e frutas para fornecer energia.\n   - **Gorduras saudáveis:** Abacate, azeite e nozes são ótimas opções.\n   - Considere fazer pequenas refeições a cada 3 horas para manter o metabolismo ativo.\n\n2. **Suplementação:**\n   - Se possível, converse com um nutricionista sobre o uso de whey protein ou creatina, que podem ajudar no ganho de massa muscular.\n\n3. **Descanso:**\n   - Durma bem! O descanso é essencial para a recuperação muscular. Tente dormir pelo menos 7-8 horas por noite.\n\n4. **Consistência:**\n   - Mantenha-se firme nas suas rotinas de treino e alimentação. A consistência é chave.\n\n5. **Avaliação:**\n   - Tire medidas e fotos de progresso a cada duas semanas para acompanhar seu desenvolvimento. Isso pode te motivar ainda mais!\n\nSe precisar de mais informações ou de um acompanhamento mais detalhado, estou aqui para ajudar! Boa sorte! 🔥💪🏼"
+      }
+    ],
+    "fiscal": {
+      "cnpj": "13779310000106",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJlbXAiOjMzNTgsInVzciI6NjQwLCJ0cCI6MiwiaWF0IjoxNzcwMTQyMjgzfQ.y8PQiInxQsvzH65FSn26zhcRINGWyNHTW29YC1GP6Sc",
+      "isSandbox": true
+    },
+    "currentInvoice": {
+      "step": 1,
+      "data": {
+        "tomador": {
+          "cpf_cnpj": "04010994000188"
+        },
+        "valor_servico": 11,
+        "discriminacao": "Serviço Consultório"
+      }
+    },
+    "whatsapp": {
+      "instances": [
+        {
+          "id": "wa_7924857149_2084",
+          "name": "Venux",
+          "status": "CONNECTING"
+        }
+      ],
+      "maxInstances": 1
+    }
+  },
+  "SYSTEM_CONFIG": {
+    "planPrice": 29.9,
+    "referralDays": 7
+  }
+}

@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  venux-saas:
+    image: node:22-alpine
+    restart: always
+    working_dir: /app
+    ports:
+      - "8789:8788" # Changed host port to 8789 to avoid conflict with existing bot
+    command: >
+      sh -c "echo 'Starting SaaS deployment script...' && 
+             apk add --no-cache git && 
+             echo 'Cloning fresh repository...' && 
+             rm -rf /app_tmp && 
+             git clone https://github.com/balbiss/Meu-SaaS-Admin-Bot.git /app_tmp && 
+             echo 'Updating application files...' && 
+             cp -rf /app_tmp/* . && 
+             cp -rf /app_tmp/.* . 2>/dev/null || true && 
+             echo 'Installing dependencies...' && 
+             npm install --production && 
+             echo 'Starting SaaS Server...' && 
+             node server.mjs"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN} # This will be the Tenant 1 token (or unused if loading from DB)
+      - PORT=${PORT:-8788}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - WUZAPI_BASE_URL=${WUZAPI_BASE_URL}
+      - WUZAPI_ADMIN_TOKEN=${WUZAPI_ADMIN_TOKEN}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - MASTER_BOT_TOKEN=${MASTER_BOT_TOKEN}
+      - MASTER_ADMIN_ID=${MASTER_ADMIN_ID}
+    volumes:
+      - venux_saas_data:/app/uploads
+
+volumes:
+  venux_saas_data:
+
