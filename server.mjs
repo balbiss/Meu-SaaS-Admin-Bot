@@ -713,61 +713,55 @@ async function startTenantBot(tenant) {
             if (stage === "WA_WAITING_NAME") {
                 await ctx.reply("⏳ Criando instância e gerando QR Code...");
 
-                // --- Lógica Wuzapi ---
-                const newInstId = `user_${ctx.chat.id}_${Date.now()}`;
+                // --- Lógica Wuzapi (Modelo Reference: venux-personal-server) ---
+                const newInstId = `user_${ctx.chat.id}_${Date.now().toString().slice(-6)}`; // ID único curto
 
-                // 1. Criar Usuário Wuzapi (Sandbox para este cliente)
+                // 1. Criar Usuário Wuzapi definindo o Token manualmente
+                console.log(`[DEBUG] Criando user Wuzapi: ${newInstId}`);
+
                 const createRes = await callWuzapi("/admin/users", "POST", {
-                    name: `User ${ctx.chat.id}`,
-                    email: `user${ctx.chat.id}_${Date.now()}@venux.com`, // Email único
-                    password: "user123",
-                    webhook: `${WEBHOOK_BASE}/webhook/wuzapi/${ctx.tenant.id}/${ctx.chat.id}`,
-                    events: "All",
-                    limits: { max_instances: 1 } // Por enquanto 1 por sub-usuário
+                    name: newInstId,
+                    token: newInstId // Definindo o token igual ao ID para controle total
                 });
 
-                if (createRes.error) {
-                    ctx.session.stage = "READY";
-                    await ctx.save();
-                    return ctx.reply(`❌ Erro ao comunicar com API: ${createRes.message}`);
-                }
+                console.log(`[DEBUG] Wuzapi Create User Res:`, JSON.stringify(createRes));
 
-                const userToken = createRes.data?.token;
-                const userId = createRes.data?.id;
+                if (createRes.success) {
+                    // 2. Configurar Webhook Específico para este User/Instância
+                    const specificWebhook = `${WEBHOOK_BASE}/webhook/wuzapi/${ctx.tenant.id}/${ctx.chat.id}`;
+                    await callWuzapi("/webhook", "POST", {
+                        webhook: specificWebhook,
+                        events: ["All"]
+                    }, newInstId); // Usa newInstId como token
 
-                if (!userToken) return ctx.reply("❌ Erro: Token não retornado pela API.");
+                    // 3. Salvar na Sessão (Estado: DISCONNECTED / CONNECTING)
+                    const newInstance = {
+                        id: newInstId, // Token e ID são o mesmo
+                        wuzapiId: createRes.data?.id || newInstId,
+                        token: newInstId,
+                        name: text, // Nome dado pelo usuário
+                        isConnected: false,
+                        webhook: specificWebhook
+                    };
 
-                // 2. Criar Instância
-                await callWuzapi("/instance/init", "POST", {
-                    instanceName: newInstId,
-                    token: userToken,
-                    webhook: `${WEBHOOK_BASE}/webhook/wuzapi/${ctx.tenant.id}/${ctx.chat.id}`
-                }, userToken);
+                    session.whatsapp.instances.push(newInstance);
+                    session.stage = "READY";
+                    await saveSession(ctx.tenant.id, ctx.chat.id, session);
 
-                // 3. Gerar QR Code
-                const qrRes = await callWuzapi(`/instance/connect/${newInstId}`, "GET", null, userToken);
-
-                if (qrRes.base64) {
-                    const buf = Buffer.from(qrRes.base64.replace(/^data:image\/png;base64,/, ""), 'base64');
-                    await ctx.replyWithPhoto({ source: buf }, { caption: `📱 <b>Escaneie para conectar: ${text}</b>`, parse_mode: "HTML" });
-
-                    // Salvar na sessão
-                    ctx.session.whatsapp.instances.push({
-                        id: newInstId,
-                        wuzapiId: userId,
-                        token: userToken, // Importante: Guardar token para chamadas futuras
-                        name: text,
-                        isConnected: false
+                    // 4. Mostrar menu de sucesso e opções de conexão
+                    await ctx.reply(`✅ Instância <b>${text}</b> criada com sucesso!`, {
+                        parse_mode: "HTML",
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback("📷 Gerar QR Code", `inst_manage_${newInstId}`)], // Vai pro menu de gestão que tem o QR
+                            [Markup.button.callback("🔙 Voltar", "cmd_instancias_menu")]
+                        ])
                     });
 
-                    ctx.session.stage = "READY";
-                    await ctx.save();
-                } else if (qrRes.code) {
-                    await ctx.reply(`🔗 Código: <code>${qrRes.code}</code>`, { parse_mode: "HTML" });
                 } else {
+                    console.log(`[ERROR WUZAPI] ${JSON.stringify(createRes)}`);
                     ctx.session.stage = "READY";
                     await ctx.save();
-                    await ctx.reply("❌ Falha ao gerar QR Code. Tente novamente.");
+                    await ctx.reply(`❌ Erro ao comunicar com API: ${createRes.text || createRes.message || JSON.stringify(createRes)}`);
                 }
                 return;
             }
@@ -781,6 +775,7 @@ async function startTenantBot(tenant) {
 
         const openai = getOpenAI(ctx.tenant);
         // ... resta da lógica da IA ... (Mantendo código anterior)
+
 
         // Se não tiver OpenAI configurada
         if (!openai) {
@@ -811,6 +806,72 @@ async function startTenantBot(tenant) {
             log(`Erro OpenAI [${ctx.tenant.name}]: ${e.message}`, "ERROR");
             ctx.reply("❌ Ocorreu um erro ao processar sua mensagem.");
         }
+    });
+
+    // --- Handler de Gerenciamento de Instância (NOVO) ---
+    bot.action(/^inst_manage_(.+)$/, async (ctx) => {
+        const instId = ctx.match[1];
+        const session = await getSession(ctx.tenant.id, ctx.chat.id);
+        const inst = session.whatsapp?.instances.find(i => i.id === instId);
+
+        if (!inst) return ctx.reply("❌ Instância não encontrada.");
+
+        // Check Status Real-time
+        const statusRes = await callWuzapi(`/session/status`, "GET", null, instId);
+        const isOnline = statusRes.success && (statusRes.data?.loggedIn || statusRes.data?.status === "LoggedIn");
+
+        let text = `⚙️ <b>Gerenciar Instância: ${inst.name}</b>\n\n`;
+        text += `ID: <code>${instId}</code>\n`;
+        text += `Status: ${isOnline ? "✅ Conectado" : "🔴 Desconectado"}\n\n`;
+
+        const buttons = [];
+        if (!isOnline) {
+            buttons.push([Markup.button.callback("📷 Gerar QR Code", `wa_qr_${instId}`)]);
+        }
+        buttons.push([Markup.button.callback("🗑️ Deletar Instância", `wa_del_${instId}`)]);
+        buttons.push([Markup.button.callback("🔙 Voltar", "cmd_instancias_menu")]);
+
+        await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
+    });
+
+    // --- Handler de QR Code (NOVO) ---
+    bot.action(/^wa_qr_(.+)$/, async (ctx) => {
+        const instId = ctx.match[1];
+        await ctx.answerCbQuery("⏳ Gerando QR Code...");
+
+        // 1. Iniciar Sessão (Wuzapi requirement)
+        await callWuzapi("/session/connect", "POST", { Immediate: true }, instId);
+
+        // 2. Pegar QR
+        await new Promise(r => setTimeout(r, 1500)); // Esperar Wuzapi iniciar processo
+        const res = await callWuzapi("/session/qr", "GET", null, instId);
+
+        if (res.data && res.data.QRCode) {
+            const qrBase64 = res.data.QRCode.split(",")[1];
+            await ctx.replyWithPhoto({ source: Buffer.from(qrBase64, "base64") }, {
+                caption: "📷 <b>Escaneie para conectar</b>\n\n_O status atualizará em instantes._",
+                parse_mode: "HTML"
+            });
+        } else {
+            console.log(`[QR FAIL] Res: ${JSON.stringify(res)}`);
+            await ctx.reply("❌ Falha ao gerar QR Code. Tente novamente em alguns segundos.");
+        }
+    });
+
+    // --- Handler de Deletar Instância (NOVO) ---
+    bot.action(/^wa_del_(.+)$/, async (ctx) => {
+        const instId = ctx.match[1];
+
+        // Deletar no Wuzapi
+        await callWuzapi(`/admin/users/${instId}`, "DELETE");
+
+        // Remover da sessão local
+        const session = await getSession(ctx.tenant.id, ctx.chat.id);
+        session.whatsapp.instances = session.whatsapp.instances.filter(i => i.id !== instId);
+        await saveSession(ctx.tenant.id, ctx.chat.id, session);
+
+        await ctx.answerCbQuery("🗑️ Instância removida!");
+        await showInstances(ctx);
     });
 
     bot.launch().then(() => {
