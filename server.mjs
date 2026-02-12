@@ -43,6 +43,11 @@ const WEBHOOK_BASE = process.env.WEBHOOK_URL || `http://localhost:${PORT}/webhoo
 const MASTER_SYNCPAY_ID = process.env.SYNCPAY_MASTER_ID;
 const MASTER_SYNCPAY_SECRET = process.env.SYNCPAY_MASTER_SECRET;
 
+console.log("--- DEBUG ENV VARS ---");
+console.log("SYNCPAY_MASTER_ID:", MASTER_SYNCPAY_ID ? (MASTER_SYNCPAY_ID.substring(0, 4) + "***") : "UNDEFINED");
+console.log("SYNCPAY_MASTER_SECRET:", MASTER_SYNCPAY_SECRET ? "PRESENT (MASKED)" : "UNDEFINED");
+console.log("----------------------");
+
 // -- Supabase Setup (Banco SaaS) --
 const supabase = createClient(
     process.env.SUPABASE_URL,
