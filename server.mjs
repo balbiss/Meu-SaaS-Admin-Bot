@@ -440,7 +440,7 @@ async function startTenantBot(tenant) {
             await ctx.reply(
                 `💰 <b>Renovação de Assinatura</b>\n` +
                 `Valor: R$ 49,90\n` +
-                `ID: <code>${charge.id}</code>\n\n` +
+                `Cliente: <b>${ctx.tenant.name}</b>\n\n` +
                 `Copie o código abaixo e pague no seu banco:`,
                 { parse_mode: "HTML" }
             );
