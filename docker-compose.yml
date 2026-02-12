@@ -7,12 +7,20 @@ services:
     working_dir: /app
     ports:
       - "8789:8788"
-    # Porta mapeada para o código baixado pelo Portainer (Bind Mount)
-    volumes:
-      - .:/app
-      - venux_saas_data:/app/uploads
-    # Instala dependências e roda o server sempre que o container reiniciar
-    command: sh -c "npm install --production && node server.mjs"
+    # VOLTAMOS para o script de clone automático
+    # Motivo: O Portainer muitas vezes não consegue "emprestar" a pasta dele para o Docker (erro bind source path)
+    # Assim, o próprio container baixa o código atualizado quando reinicia.
+    command: >
+      sh -c "echo 'Starting SaaS Deployment...' && 
+             apk add --no-cache git && 
+             rm -rf /app_tmp && 
+             echo 'Cloning from GitHub...' && 
+             git clone https://github.com/balbiss/Meu-SaaS-Admin-Bot.git /app_tmp && 
+             cp -rf /app_tmp/* . && 
+             cp -rf /app_tmp/.* . 2>/dev/null || true && 
+             npm install --production && 
+             echo 'Starting Server...' && 
+             node server.mjs"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
@@ -25,6 +33,8 @@ services:
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - MASTER_BOT_TOKEN=${MASTER_BOT_TOKEN}
       - MASTER_ADMIN_ID=${MASTER_ADMIN_ID}
+    volumes:
+      - venux_saas_data:/app/uploads
 
 volumes:
   venux_saas_data:
