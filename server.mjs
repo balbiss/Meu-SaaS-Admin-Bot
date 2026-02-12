@@ -149,6 +149,13 @@ async function startTenantBot(tenant) {
         return next();
     });
 
+    // Definir Menu de Comandos do Bot (Para o Tenant e Usuários)
+    bot.telegram.setMyCommands([
+        { command: "start", description: "Iniciar atendimento" },
+        { command: "admin", description: "Painel do Dono (Configurações)" },
+        { command: "id", description: "Ver meu ID do Telegram" }
+    ]);
+
     // --- OWNER DASHBOARD ---
     const isOwner = (ctx) => String(ctx.chat.id) === String(ctx.tenant.owner_chat_id);
 
