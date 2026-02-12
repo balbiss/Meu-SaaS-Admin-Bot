@@ -37,7 +37,7 @@ function getOpenAI(tenant) {
 
 const WUZAPI_BASE_URL = process.env.WUZAPI_BASE_URL || "http://localhost:8080";
 const WUZAPI_ADMIN_TOKEN = process.env.WUZAPI_ADMIN_TOKEN;
-const WEBHOOK_BASE = process.env.WEBHOOK_URL || `http://localhost:${PORT}/webhook`;
+const WEBHOOK_BASE = (process.env.WEBHOOK_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 
 // -- Credenciais MESTRE (Para receber pagamentos das assinaturas) --
 const MASTER_SYNCPAY_ID = process.env.SYNCPAY_MASTER_ID;
