@@ -206,9 +206,9 @@ async function startTenantBot(tenant) {
         ctx.session.stage = "OWNER_WAIT_OPENAI_KEY";
         await ctx.save();
         await ctx.reply(
-            "🧠 <b>Configuração de IA</b>\n\n" +
-            "Envie a sua <b>API Key da OpenAI</b> (começa com sk-...).\n" +
-            "Se quiser cancelar e manter a atual, envie /cancelar.",
+            "⚠️ <b>Atenção:</b> Para a IA funcionar, você precisa usar a <b>SUA</b> API Key.\n\n" +
+            "Envie agora a sua chave (começa com sk-...).\n" +
+            "Se não enviar, a inteligência do bot ficará desligada.",
             { parse_mode: "HTML" }
         );
     });
