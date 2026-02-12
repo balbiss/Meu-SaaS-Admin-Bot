@@ -30,7 +30,7 @@ const DEFAULT_MODEL = "gpt-4o-mini";
 
 // Helper para pegar a instância da OpenAI correta
 function getOpenAI(tenant) {
-    const apiKey = tenant.openai_api_key || process.env.OPENAI_API_KEY;
+    const apiKey = tenant.openai_api_key; // STRICT MODE: Apenas key do tenant
     if (!apiKey) return null;
     return new OpenAI({ apiKey });
 }
@@ -160,7 +160,7 @@ async function startTenantBot(tenant) {
         const syncPayStatus = (tenant.syncpay_client_id && tenant.syncpay_client_secret) ? "✅ Configurado" : "⚠️ Pendente";
 
         // Status da IA
-        const aiKeyStatus = tenant.openai_api_key ? "✅ Própria" : "⚠️ Sistema (Padrão)";
+        const aiKeyStatus = tenant.openai_api_key ? "✅ Própria (Ativa)" : "🔴 Não Configurada (IA Off)";
         const aiModel = tenant.openai_model || DEFAULT_MODEL;
 
         const text = `👑 <b>Painel do Dono (${tenant.name})</b>\n\n` +
@@ -344,9 +344,45 @@ async function startTenantBot(tenant) {
         ctx.reply(`🆔 ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
     });
 
-    // Aqui você adicionaria toda a lógica original do seu bot (Wuzapi, Menus, etc)
-    // Adaptada para usar ctx.tenant e ctx.session
-    // ...
+    // -- Lógica de Chat da IA --
+    bot.on("text", async (ctx) => {
+        // Ignorar se estiver em uma "sessão" de wizard (Owner)
+        if (ctx.session?.stage && ctx.session.stage !== "READY") return;
+
+        // Se for comando, ignora (já tratado)
+        if (ctx.message.text.startsWith("/")) return;
+
+        const openai = getOpenAI(ctx.tenant);
+
+        // Se não tiver OpenAI configurada
+        if (!openai) {
+            // Se for o dono, avisa como configurar. Se for usuário comum, diz que está em manutenção.
+            if (String(ctx.chat.id) === String(ctx.tenant.owner_chat_id)) {
+                return ctx.reply("⚠️ <b>IA Não Configurada.</b>\nUse /admin para adicionar sua API Key.", { parse_mode: "HTML" });
+            } else {
+                return ctx.reply("🤖 O administrador ainda não ativou minha inteligência.");
+            }
+        }
+
+        const model = ctx.tenant.openai_model || DEFAULT_MODEL;
+
+        try {
+            await ctx.sendChatAction("typing");
+
+            const response = await openai.chat.completions.create({
+                model: model,
+                messages: [
+                    { role: "system", content: "Você é um assistente útil e inteligente." },
+                    { role: "user", content: ctx.message.text }
+                ],
+            });
+
+            ctx.reply(response.choices[0].message.content);
+        } catch (e) {
+            log(`Erro OpenAI [${ctx.tenant.name}]: ${e.message}`, "ERROR");
+            ctx.reply("❌ Ocorreu um erro ao processar sua mensagem.");
+        }
+    });
 
     bot.launch().then(() => {
         log(`Bot Online! 🚀`, tenant.name);
