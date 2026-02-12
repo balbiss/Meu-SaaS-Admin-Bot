@@ -480,6 +480,15 @@ if (MASTER_TOKEN) {
         ctx.reply(`🆔 Seu ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
     });
 
+    // Definir Menu de Comandos do Master Bot
+    masterBot.telegram.setMyCommands([
+        { command: "novo_cliente", description: "Criar novo tenant" },
+        { command: "clientes", description: "Listar clientes e vencimentos" },
+        { command: "renovar", description: "Renovar assinatura" },
+        { command: "bloquear", description: "Bloquear acesso" },
+        { command: "meu_id", description: "Ver meu ID" }
+    ]);
+
     // LISTAR CLIENTES
     masterBot.command("clientes", async (ctx) => {
         const { data: tenants } = await supabase.from('tenants').select('*').order('id');
