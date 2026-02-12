@@ -129,7 +129,7 @@ async function generateSubscriptionCharge(tenant) {
 
     // 1. Auth no SyncPay (Como MESTRE)
     const authDesc = Buffer.from(`${MASTER_SYNCPAY_ID}:${MASTER_SYNCPAY_SECRET}`).toString('base64');
-    const tokenRes = await fetch("https://api.syncpay.com.br/oauth/token", {
+    const tokenRes = await fetch("https://api.syncpayments.com.br/oauth/token", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -142,7 +142,7 @@ async function generateSubscriptionCharge(tenant) {
     const { access_token } = await tokenRes.json();
 
     // 2. Gerar Cobrança Pix
-    const chargeRes = await fetch("https://api.syncpay.com.br/v1/billing/pix", {
+    const chargeRes = await fetch("https://api.syncpayments.com.br/v1/billing/pix", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
