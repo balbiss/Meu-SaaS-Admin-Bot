@@ -152,27 +152,21 @@ async function generateSubscriptionCharge(tenant) {
     const { access_token } = await tokenRes.json();
 
     // 2. Gerar Cobrança Pix
-    // Tentativa com endpoint Cash-In
-    const chargeRes = await fetch("https://api.syncpayments.com.br/api/partner/v1/pix/cash-in", {
+    // Tentativa endpoint padrão: POST /api/v1/pix
+    const chargeUrl = "https://api.syncpayments.com.br/api/v1/pix/orders";
+    log(`Gerando Pix em: ${chargeUrl}`);
+
+    const chargeRes = await fetch(chargeUrl, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${access_token}`
         },
         body: JSON.stringify({
-            items: [{
-                name: `Renovação SaaS - ${tenant.name}`,
-                value: price * 100, // em centavos
-                amount: 1
-            }],
-            external_id: `SUB_${tenant.id}`, // Prefixo para identificar renovação
-            customer: {
-                name: tenant.name,
-                email: `tenant_${tenant.id}@venux.com`, // Placeholder ou real se tiver
-                phone: "11999999999", // Placeholder
-                document: "00000000000" // Placeholder
-            },
-            expire_at: new Date(Date.now() + expiryMinutes * 60000).toISOString()
+            amount: Math.round(price * 100), // centavos
+            description: `Renovação SaaS - ${tenant.name}`,
+            external_id: `SUB_${tenant.id}`,
+            expiration: expiryMinutes * 60
         })
     });
 
