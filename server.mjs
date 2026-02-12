@@ -129,7 +129,7 @@ async function generateSubscriptionCharge(tenant) {
         throw new Error("Sistema de cobrança não configurado pelo Admin Mestre.");
     }
 
-    const price = 49.90; // Preço da Assinatura Mensal
+    const price = tenant.subscription_price || 49.90; // Preço Personalizado ou Padrão
     const expiryMinutes = 60; // 1 hora para pagar
 
     // 1. Auth no SyncPay (Como MESTRE)
@@ -686,6 +686,7 @@ if (MASTER_TOKEN) {
             "👑 <b>Painel Master SaaS</b>\n\n" +
             "👤 /novo_cliente - Criar Tenant\n" +
             "📋 /clientes - Listar e Ver Vencimentos\n" +
+            "💲 /preco [ID] [Valor] - Alterar Preço\n" +
             "📅 /renovar [ID] [Dias] - Renovar Assinatura\n" +
             "🚫 /bloquear [ID] - Bloquear Acesso",
             { parse_mode: "HTML" }
@@ -759,6 +760,21 @@ if (MASTER_TOKEN) {
             activeBots.get(parseInt(id)).stop();
             activeBots.delete(parseInt(id));
         }
+    });
+
+    // DEFINIR PREÇO
+    masterBot.command("preco", async (ctx) => {
+        const args = ctx.message.text.split(" ");
+        const id = args[1];
+        const price = parseFloat(args[2].replace(",", "."));
+
+        if (!id || isNaN(price)) return ctx.reply("Use: /preco [ID] [Valor]\nEx: /preco 5 99.90");
+
+        const { error } = await supabase.from('tenants').update({ subscription_price: price }).eq('id', id);
+
+        if (error) return ctx.reply(`❌ Erro: ${error.message}`);
+        ctx.reply(`✅ Preço do Cliente ID <b>${id}</b> atualizado para <b>R$ ${price.toFixed(2)}</b>`, { parse_mode: "HTML" });
+        loadTenants(); // Recarregar para atualizar memória
     });
 
     masterBot.command("novo_cliente", (ctx) => {
