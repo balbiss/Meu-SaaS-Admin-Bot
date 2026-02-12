@@ -335,7 +335,7 @@ if (MASTER_TOKEN) {
 
     masterBot.command("novo_cliente", (ctx) => {
         masterSessions.set(ctx.chat.id, { stage: "WAIT_NAME", data: {} });
-        ctx.reply("📝 <b>Novo Cliente</b>\n\nQual o <b>Nome</b> do cliente/empresa?", { parse_mode: "HTML" });
+        ctx.reply("📝 Novo Cliente\n\nQual o Nome do cliente/empresa?");
     });
 
     masterBot.on("text", async (ctx) => {
@@ -345,7 +345,7 @@ if (MASTER_TOKEN) {
         if (session.stage === "WAIT_NAME") {
             session.data.name = ctx.message.text.trim();
             session.stage = "WAIT_TOKEN";
-            return ctx.reply("🤖 Qual o <b>Token do Bot</b> dele?", { parse_mode: "HTML" });
+            return ctx.reply("🤖 Qual o Token do Bot dele?");
         }
 
         if (session.stage === "WAIT_TOKEN") {
@@ -355,7 +355,7 @@ if (MASTER_TOKEN) {
 
             session.data.telegram_token = token;
             session.stage = "WAIT_OWNER_ID";
-            return ctx.reply("👤 Qual o <b>Telegram ID (Chat ID)</b> do Dono?\n(Ele usará isso para acessar o painel /admin)", { parse_mode: "HTML" });
+            return ctx.reply("👤 Qual o Telegram ID (Chat ID) do Dono?\n(Ele usará isso para acessar o painel /admin)");
         }
 
         if (session.stage === "WAIT_OWNER_ID") {
