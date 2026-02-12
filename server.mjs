@@ -39,6 +39,10 @@ const WUZAPI_BASE_URL = process.env.WUZAPI_BASE_URL || "http://localhost:8080";
 const WUZAPI_ADMIN_TOKEN = process.env.WUZAPI_ADMIN_TOKEN;
 const WEBHOOK_BASE = process.env.WEBHOOK_URL || `http://localhost:${PORT}/webhook`;
 
+// -- Credenciais MESTRE (Para receber pagamentos das assinaturas) --
+const MASTER_SYNCPAY_ID = process.env.SYNCPAY_MASTER_ID;
+const MASTER_SYNCPAY_SECRET = process.env.SYNCPAY_MASTER_SECRET;
+
 // -- Supabase Setup (Banco SaaS) --
 const supabase = createClient(
     process.env.SUPABASE_URL,
@@ -114,6 +118,61 @@ async function saveSession(tenantId, chatId, sessionData) {
         }, { onConflict: 'tenant_id,chat_id' });
 }
 
+// -- Helper de Pagamento MESTRE (Renovação) --
+async function generateSubscriptionCharge(tenant) {
+    if (!MASTER_SYNCPAY_ID || !MASTER_SYNCPAY_SECRET) {
+        throw new Error("Sistema de cobrança não configurado pelo Admin Mestre.");
+    }
+
+    const price = 49.90; // Preço da Assinatura Mensal
+    const expiryMinutes = 60; // 1 hora para pagar
+
+    // 1. Auth no SyncPay (Como MESTRE)
+    const authDesc = Buffer.from(`${MASTER_SYNCPAY_ID}:${MASTER_SYNCPAY_SECRET}`).toString('base64');
+    const tokenRes = await fetch("https://api.syncpay.com.br/oauth/token", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Basic ${authDesc}`
+        },
+        body: JSON.stringify({ grant_type: "client_credentials" })
+    });
+
+    if (!tokenRes.ok) throw new Error("Falha na autenticação SyncPay Master");
+    const { access_token } = await tokenRes.json();
+
+    // 2. Gerar Cobrança Pix
+    const chargeRes = await fetch("https://api.syncpay.com.br/v1/billing/pix", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${access_token}`
+        },
+        body: JSON.stringify({
+            items: [{
+                name: `Renovação SaaS - ${tenant.name}`,
+                value: price * 100, // em centavos
+                amount: 1
+            }],
+            external_id: `SUB_${tenant.id}`, // Prefixo para identificar renovação
+            customer: {
+                name: tenant.name,
+                email: `tenant_${tenant.id}@venux.com`, // Placeholder ou real se tiver
+                phone: "11999999999", // Placeholder
+                document: "00000000000" // Placeholder
+            },
+            expire_at: new Date(Date.now() + expiryMinutes * 60000).toISOString()
+        })
+    });
+
+    if (!chargeRes.ok) {
+        const err = await chargeRes.text();
+        throw new Error(`Erro ao gerar Pix: ${err}`);
+    }
+
+    return await chargeRes.json(); // Retorna { qrcode_text, qrcode_image_url, etc }
+}
+
 // -- SaaS Bot Factory --
 async function startTenantBot(tenant) {
     if (activeBots.has(tenant.id)) {
@@ -187,6 +246,7 @@ async function startTenantBot(tenant) {
         const buttons = [
             [Markup.button.callback("💳 Configurar SyncPay", "owner_setup_syncpay")],
             [Markup.button.callback("🧠 Configurar IA", "owner_setup_ai")],
+            [Markup.button.callback("💸 Renovar Assinatura (R$ 49,90)", "owner_renew_sub")],
             [Markup.button.callback("🔄 Recarregar Bot", "owner_reload_bot")]
         ];
 
@@ -321,98 +381,113 @@ async function startTenantBot(tenant) {
     });
 
     // --- MODEL SELECTION ACTIONS ---
-    const saveModel = async (ctx, modelName) => {
-        const key = ctx.session.temp_openai_key;
-        if (!key) return ctx.reply("❌ Sessão expirada. Comece de novo.");
-
-        const { error } = await supabase
-            .from('tenants')
-            .update({
-                openai_api_key: key,
-                openai_model: modelName
-            })
-            .eq('id', ctx.tenant.id);
-
-        if (error) return ctx.reply(`❌ Erro ao salvar: ${error.message}`);
-
-        ctx.session.stage = "READY";
-        ctx.session.temp_openai_key = null;
-        await ctx.save();
-
-        // Atualizar memória
-        ctx.tenant.openai_api_key = key;
-        ctx.tenant.openai_model = modelName;
-
-        await ctx.reply(`✅ <b>IA Configurada!</b>\nModelo: ${modelName}`, { parse_mode: "HTML" });
-        return renderOwnerDashboard(ctx);
+    await ctx.save();
+    await ctx.reply(`✅ <b>IA Configurada!</b>\nModelo: ${modelName}`, { parse_mode: "HTML" });
+    return renderOwnerDashboard(ctx);
+};
     };
 
-    bot.action("set_model_4o_mini", (ctx) => saveModel(ctx, "gpt-4o-mini"));
-    bot.action("set_model_4o", (ctx) => saveModel(ctx, "gpt-4o"));
-    bot.action("set_model_35", (ctx) => saveModel(ctx, "gpt-3.5-turbo"));
+// --- RENOVAÇÃO DE ASSINATURA ---
+bot.action("owner_renew_sub", async (ctx) => {
+    if (!isOwner(ctx)) return;
+    await ctx.answerCbQuery("Gerando Pix...");
+    await ctx.reply("⏳ <b>Gerando cobrança...</b> Aguarde um momento.", { parse_mode: "HTML" });
 
+    try {
+        const charge = await generateSubscriptionCharge(ctx.tenant);
 
-    bot.start(async (ctx) => {
-        const userFirstName = ctx.from.first_name || "Usuário";
-        const welcomeMsg = `👋 <b>Olá, ${userFirstName}!</b>\n\n` +
-            `Bem-vindo ao sistema de automação de <b>${ctx.tenant.name}</b>.\n` +
-            `\n🆔 Seu ID: <code>${ctx.chat.id}</code>` +
-            `\n🏢 Tenant: ${ctx.tenant.name}`;
+        const pixCode = charge.qrcode_text;
+        const qrImage = charge.qrcode_image_url;
 
-        await ctx.reply(welcomeMsg, { parse_mode: "HTML" });
-    });
-
-    bot.command("id", (ctx) => {
-        ctx.reply(`🆔 ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
-    });
-
-    // -- Lógica de Chat da IA --
-    bot.on("text", async (ctx) => {
-        // Ignorar se estiver em uma "sessão" de wizard (Owner)
-        if (ctx.session?.stage && ctx.session.stage !== "READY") return;
-
-        // Se for comando, ignora (já tratado)
-        if (ctx.message.text.startsWith("/")) return;
-
-        const openai = getOpenAI(ctx.tenant);
-
-        // Se não tiver OpenAI configurada
-        if (!openai) {
-            // Se for o dono, avisa como configurar. Se for usuário comum, diz que está em manutenção.
-            if (String(ctx.chat.id) === String(ctx.tenant.owner_chat_id)) {
-                return ctx.reply("⚠️ <b>IA Não Configurada.</b>\nUse /admin para adicionar sua API Key.", { parse_mode: "HTML" });
-            } else {
-                return ctx.reply("🤖 O administrador ainda não ativou minha inteligência.");
-            }
+        // Envia Imagem QR Code
+        if (qrImage) {
+            await ctx.replyWithPhoto(qrImage, { caption: "📱 Escaneie para pagar" });
         }
 
-        const model = ctx.tenant.openai_model || DEFAULT_MODEL;
+        // Envia Copia e Cola
+        await ctx.reply(
+            `💰 <b>Renovação de Assinatura</b>\n` +
+            `Valor: R$ 49,90\n` +
+            `ID: <code>${charge.id}</code>\n\n` +
+            `Copie o código abaixo e pague no seu banco:`,
+            { parse_mode: "HTML" }
+        );
+        await ctx.reply(`<code>${pixCode}</code>`, { parse_mode: "HTML" });
 
-        try {
-            await ctx.sendChatAction("typing");
+        await ctx.reply("ℹ️ Assim que o pagamento for confirmado, seu plano será renovado automaticamente por +30 dias.");
 
-            const response = await openai.chat.completions.create({
-                model: model,
-                messages: [
-                    { role: "system", content: "Você é um assistente útil e inteligente." },
-                    { role: "user", content: ctx.message.text }
-                ],
-            });
+    } catch (e) {
+        log(`Erro renovação [${ctx.tenant.name}]: ${e.message}`, "ERROR");
+        await ctx.reply(`❌ Erro ao gerar cobrança: ${e.message}`);
+    }
+});
 
-            ctx.reply(response.choices[0].message.content);
-        } catch (e) {
-            log(`Erro OpenAI [${ctx.tenant.name}]: ${e.message}`, "ERROR");
-            ctx.reply("❌ Ocorreu um erro ao processar sua mensagem.");
+bot.action("set_model_4o_mini", (ctx) => saveModel(ctx, "gpt-4o-mini"));
+bot.action("set_model_4o", (ctx) => saveModel(ctx, "gpt-4o"));
+bot.action("set_model_35", (ctx) => saveModel(ctx, "gpt-3.5-turbo"));
+
+
+bot.start(async (ctx) => {
+    const userFirstName = ctx.from.first_name || "Usuário";
+    const welcomeMsg = `👋 <b>Olá, ${userFirstName}!</b>\n\n` +
+        `Bem-vindo ao sistema de automação de <b>${ctx.tenant.name}</b>.\n` +
+        `\n🆔 Seu ID: <code>${ctx.chat.id}</code>` +
+        `\n🏢 Tenant: ${ctx.tenant.name}`;
+
+    await ctx.reply(welcomeMsg, { parse_mode: "HTML" });
+});
+
+bot.command("id", (ctx) => {
+    ctx.reply(`🆔 ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
+});
+
+// -- Lógica de Chat da IA --
+bot.on("text", async (ctx) => {
+    // Ignorar se estiver em uma "sessão" de wizard (Owner)
+    if (ctx.session?.stage && ctx.session.stage !== "READY") return;
+
+    // Se for comando, ignora (já tratado)
+    if (ctx.message.text.startsWith("/")) return;
+
+    const openai = getOpenAI(ctx.tenant);
+
+    // Se não tiver OpenAI configurada
+    if (!openai) {
+        // Se for o dono, avisa como configurar. Se for usuário comum, diz que está em manutenção.
+        if (String(ctx.chat.id) === String(ctx.tenant.owner_chat_id)) {
+            return ctx.reply("⚠️ <b>IA Não Configurada.</b>\nUse /admin para adicionar sua API Key.", { parse_mode: "HTML" });
+        } else {
+            return ctx.reply("🤖 O administrador ainda não ativou minha inteligência.");
         }
-    });
+    }
 
-    bot.launch().then(() => {
-        log(`Bot Online! 🚀`, tenant.name);
-    }).catch(err => {
-        log(`Erro ao iniciar bot: ${err.message}`, tenant.name);
-    });
+    const model = ctx.tenant.openai_model || DEFAULT_MODEL;
 
-    activeBots.set(tenant.id, bot);
+    try {
+        await ctx.sendChatAction("typing");
+
+        const response = await openai.chat.completions.create({
+            model: model,
+            messages: [
+                { role: "system", content: "Você é um assistente útil e inteligente." },
+                { role: "user", content: ctx.message.text }
+            ],
+        });
+
+        ctx.reply(response.choices[0].message.content);
+    } catch (e) {
+        log(`Erro OpenAI [${ctx.tenant.name}]: ${e.message}`, "ERROR");
+        ctx.reply("❌ Ocorreu um erro ao processar sua mensagem.");
+    }
+});
+
+bot.launch().then(() => {
+    log(`Bot Online! 🚀`, tenant.name);
+}).catch(err => {
+    log(`Erro ao iniciar bot: ${err.message}`, tenant.name);
+});
+
+activeBots.set(tenant.id, bot);
 }
 
 // -- Loaders --
@@ -459,6 +534,80 @@ app.post("/admin/create-tenant", async (req, res) => {
 
     startTenantBot(data);
     return res.json({ success: true, tenant: data });
+});
+
+// -- Webhook MESTRE (Recebe pagamentos das assinaturas) --
+app.post("/webhook/master", async (req, res) => {
+    const { id, type, status, charges, external_id } = req.body;
+
+    log(`[Webhook Master] Recebido: ${type} | Status: ${status} | ExtID: ${external_id}`, "SYSTEM");
+
+    // Verificar se é uma assinatura (SUB_)
+    if (!external_id || !external_id.startsWith("SUB_")) {
+        return res.json({ ignored: true, reason: "Not a subscription payment" });
+    }
+
+    // Verificar se foi pago
+    if (status !== "PAID" && status !== "RECEIVED") {
+        return res.json({ ignored: true, reason: "Status not PAID" });
+    }
+
+    const tenantIdPromise = external_id.split("SUB_")[1];
+    if (!tenantIdPromise) return res.status(400).json({ error: "Invalid External ID" });
+
+    const tenantId = tenantIdPromise;
+
+    try {
+        // 1. Buscar Tenant Atual
+        const { data: tenant, error: fetchError } = await supabase
+            .from('tenants')
+            .select('*')
+            .eq('id', tenantId)
+            .single();
+
+        if (fetchError || !tenant) {
+            log(`[Webhook Master] Tenant não encontrado: ${tenantId}`, "ERROR");
+            return res.status(404).json({ error: "Tenant not found" });
+        }
+
+        // 2. Calcular Nova Data (+30 dias a partir de agora ou da data atual se ainda não venceu)
+        let baseDate = new Date();
+        if (tenant.expiration_date && new Date(tenant.expiration_date) > baseDate) {
+            baseDate = new Date(tenant.expiration_date);
+        }
+
+        baseDate.setDate(baseDate.getDate() + 30);
+        const newExpiration = baseDate.toISOString();
+
+        // 3. Atualizar Banco
+        await supabase
+            .from('tenants')
+            .update({
+                expiration_date: newExpiration,
+                is_active: true // Reativa se estiver bloqueado
+            })
+            .eq('id', tenantId);
+
+        log(`[Webhook Master] Assinatura renovada para Tenant ${tenant.name} até ${newExpiration}`, "SYSTEM");
+
+        // 4. Notificar via Telegram (Se bot estiver rodando)
+        if (activeBots.has(tenant.id)) {
+            const botInstance = activeBots.get(tenant.id);
+            if (tenant.owner_chat_id) {
+                botInstance.telegram.sendMessage(
+                    tenant.owner_chat_id,
+                    `✅ <b>Pagamento Confirmado!</b>\n\nSua assinatura foi renovada com sucesso.\nNovo vencimento: <b>${new Date(newExpiration).toLocaleDateString("pt-BR")}</b>`,
+                    { parse_mode: "HTML" }
+                ).catch(e => log(`Erro ao notificar tenant: ${e.message}`, "ERROR"));
+            }
+        }
+
+        return res.json({ success: true, new_expiration: newExpiration });
+
+    } catch (e) {
+        log(`[Webhook Master] Erro processamento: ${e.message}`, "ERROR");
+        return res.status(500).json({ error: e.message });
+    }
 });
 
 // -- MASTER ADMIN BOT (Gerenciador do SaaS) --
