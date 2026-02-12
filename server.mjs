@@ -303,8 +303,12 @@ async function startTenantBot(tenant) {
         const aiKeyStatus = tenant.openai_api_key ? "✅ Própria (Ativa)" : "🔴 Não Configurada (IA Off)";
         const aiModel = tenant.openai_model || DEFAULT_MODEL;
 
+        const maxUsers = tenant.max_users || 10;
+        const currentUsers = tenant.activeUserCount || 0;
+
         const text = `👑 <b>Painel do Dono (${tenant.name})</b>\n\n` +
             `📊 <b>Status:</b> ${status}\n` +
+            `👥 <b>Usuários:</b> ${currentUsers}/${maxUsers}\n` +
             `💳 <b>Pagamento (SyncPay):</b> ${syncPayStatus}\n` +
             `🧠 <b>Inteligência Artificial:</b>\n` +
             `   ├ Key: ${aiKeyStatus}\n` +
@@ -315,7 +319,7 @@ async function startTenantBot(tenant) {
         const buttons = [
             [Markup.button.callback("💳 Configurar SyncPay", "owner_setup_syncpay")],
             [Markup.button.callback("🧠 Configurar IA", "owner_setup_ai")],
-            [Markup.button.callback("💸 Renovar Assinatura (R$ 49,90)", "owner_renew_sub")],
+            [Markup.button.callback("💸 Renovar Assinatura", "owner_renew_sub")],
             [Markup.button.callback("🔄 Recarregar Bot", "owner_reload_bot")]
         ];
 
