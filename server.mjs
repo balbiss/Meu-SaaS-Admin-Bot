@@ -137,13 +137,16 @@ async function generateSubscriptionCharge(tenant) {
     const tokenRes = await fetch("https://api.syncpayments.com.br/oauth/token", {
         method: "POST",
         headers: {
-            "Content-Type": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
             "Authorization": `Basic ${authDesc}`
         },
-        body: JSON.stringify({ grant_type: "client_credentials" })
+        body: new URLSearchParams({ grant_type: "client_credentials" })
     });
 
-    if (!tokenRes.ok) throw new Error("Falha na autenticação SyncPay Master");
+    if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        throw new Error(`Falha Auth Master (${tokenRes.status}): ${errText}`);
+    }
     const { access_token } = await tokenRes.json();
 
     // 2. Gerar Cobrança Pix
