@@ -243,11 +243,21 @@ async function startTenantBot(tenant) {
 
     // Capture Text Handling for Wizard
     bot.on("text", async (ctx, next) => {
+        // Ignorar se não for dono
         if (!isOwner(ctx)) return next();
 
-        if (ctx.message.text === "/cancelar") {
+        const text = ctx.message.text;
+
+        // Se for comando (começa com /), deixa passar para os handlers de comando
+        // EXCETO /cancelar, que queremos que resete o wizard aqui mesmo
+        if (text.startsWith("/") && text !== "/cancelar") {
+            return next();
+        }
+
+        if (text === "/cancelar") {
             ctx.session.stage = "READY";
             await ctx.save();
+            await ctx.reply("❌ Operação cancelada.");
             return renderOwnerDashboard(ctx);
         }
 
