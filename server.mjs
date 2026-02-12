@@ -123,13 +123,40 @@ async function saveSession(tenantId, chatId, sessionData) {
         }, { onConflict: 'tenant_id,chat_id' });
 }
 
+// Helper para pegar Preço Global
+async function getGlobalPrice() {
+    const { data } = await supabase.from('system_config').select('value').eq('key', 'default_price').single();
+    return data ? parseFloat(data.value) : 90.90;
+}
+
 // -- Helper de Pagamento MESTRE (Renovação) --
 async function generateSubscriptionCharge(tenant) {
     if (!MASTER_SYNCPAY_ID || !MASTER_SYNCPAY_SECRET) {
         throw new Error("Sistema de cobrança não configurado pelo Admin Mestre.");
     }
-    const price = tenant.subscription_price || 90.90; // Preço Personalizado ou Padrão (90.90)
+    const defaultPrice = await getGlobalPrice();
+    const price = tenant.subscription_price || defaultPrice;
     const expiryMinutes = 60; // 1 hora para pagar
+
+    // Helper para contar usuários únicos (instances)
+    async function getTenantUserCount(tenantId) {
+        const { count, error } = await supabase
+            .from('bot_sessions')
+            .select('chat_id', { count: 'exact', head: true })
+            .eq('tenant_id', tenantId);
+        return error ? 0 : count;
+    }
+
+    // Helper para verificar se usuário já existe
+    async function checkUserExists(tenantId, chatId) {
+        const { data } = await supabase
+            .from('bot_sessions')
+            .select('chat_id')
+            .eq('tenant_id', tenantId)
+            .eq('chat_id', String(chatId))
+            .single();
+        return !!data;
+    }
 
     // 1. Auth no SyncPay (Como MESTRE)
     // Documentação sugere: POST /api/partner/v1/auth-token
@@ -196,7 +223,11 @@ async function startTenantBot(tenant) {
         try { activeBots.get(tenant.id).stop(); } catch (e) { }
     }
 
-    log(`Iniciando Bot...`, tenant.name);
+    // Load initial user count
+    const initialUserCount = await getTenantUserCount(tenant.id);
+    tenant.activeUserCount = initialUserCount;
+
+    log(`Iniciando Bot [${tenant.name}]... (Usuários: ${initialUserCount}/${tenant.max_users || 10})`, "SYSTEM");
 
     const bot = new Telegraf(tenant.telegram_token);
 
@@ -208,10 +239,32 @@ async function startTenantBot(tenant) {
         if (tenant.expiration_date) {
             const now = new Date();
             const expiration = new Date(tenant.expiration_date);
-
-            // Se venceu e não é o dono (dono sempre acessa para configurar)
             if (now > expiration && String(ctx.chat.id) !== tenant.owner_chat_id) {
                 return ctx.reply("🚫 <b>Seu plano venceu!</b>\nEntre em contato com o suporte para renovar.", { parse_mode: "HTML" });
+            }
+        }
+
+        // -- VALIDAÇÃO DE LIMITE DE USUÁRIOS --
+        // Se for o dono, sempre libera
+        if (String(ctx.chat.id) !== tenant.owner_chat_id) {
+            const cacheKey = `${tenant.id}_${ctx.chat.id}`;
+            const isCached = sessionCache.has(cacheKey);
+
+            // Se não está no cache (potencial novo usuário na sessão atual do servidor)
+            if (!isCached) {
+                // Verifica se já está no banco (usuário antigo retornando)
+                const existsInDb = await checkUserExists(tenant.id, ctx.chat.id);
+
+                if (!existsInDb) {
+                    // NOVO USUÁRIO REAL
+                    const maxUsers = tenant.max_users || 10;
+                    if (tenant.activeUserCount >= maxUsers) {
+                        return ctx.reply(`🚫 <b>Limite de Usuários Atingido!</b>\n\nEste bot atingiu o limite máximo de ${maxUsers} usuários simultâneos contratados.\nEntre em contato com o administrador.`, { parse_mode: "HTML" });
+                    }
+                    // Se passou, incrementa (será salvo no saveSession depois)
+                    tenant.activeUserCount++;
+                    log(`[${tenant.name}] Novo usuário! Total: ${tenant.activeUserCount}/${maxUsers}`, "INFO");
+                }
             }
         }
 
@@ -688,7 +741,8 @@ if (MASTER_TOKEN) {
                 parse_mode: "HTML",
                 ...Markup.inlineKeyboard([
                     [Markup.button.callback("👥 Gerenciar Clientes", "list_tenants")],
-                    [Markup.button.callback("➕ Novo Cliente", "new_tenant_start")]
+                    [Markup.button.callback("➕ Novo Cliente", "new_tenant_start")],
+                    [Markup.button.callback("💲 Alterar Preço Global", "cmd_set_global_price")]
                 ])
             }
         );
@@ -711,6 +765,13 @@ if (MASTER_TOKEN) {
         });
     });
 
+    // --- LOGICA DE PREÇO GLOBAL ---
+    masterBot.action("cmd_set_global_price", async (ctx) => {
+        const currentPrice = await getGlobalPrice();
+        masterSessions.set(ctx.chat.id, { stage: "WAIT_GLOBAL_PRICE", data: {} });
+        await ctx.reply(`💲 <b>Preço Global Atual: R$ ${currentPrice.toFixed(2)}</b>\n\nDigite o novo valor para TODOS os clientes sem preço fixo (ex: 129.90):`, { parse_mode: "HTML" });
+    });
+
     // --- DETALHES DO CLIENTE ---
     masterBot.action(/manage_tenant_(.+)/, async (ctx) => {
         const id = ctx.match[1];
@@ -720,19 +781,19 @@ if (MASTER_TOKEN) {
         if (!t) return ctx.reply(`Cliente não encontrado (ID: ${id}).`);
 
         const vcto = t.expiration_date ? new Date(t.expiration_date).toLocaleDateString('pt-BR') : "Sem data";
-        const price = t.subscription_price || 90.90;
+        const price = t.subscription_price ? `R$ ${t.subscription_price.toFixed(2)} (Fixo)` : `Padrão (Global)`;
         const status = t.is_active ? "Ativo" : "Bloqueado";
 
         const msg = `🏢 <b>Cliente:</b> ${t.name}\n` +
             `🆔 ID: ${t.id}\n` +
             `📊 Status: ${status}\n` +
-            `💲 Preço: R$ ${price.toFixed(2)}\n` +
+            `💲 Preço: ${price}\n` +
             `📅 Vence em: ${vcto}`;
 
         await ctx.editMessageText(msg, {
             parse_mode: "HTML",
             ...Markup.inlineKeyboard([
-                [Markup.button.callback("💲 Alterar Preço", `cmd_price_${id}`)],
+                [Markup.button.callback("💲 Definir Preço Fixo", `cmd_price_${id}`)],
                 [Markup.button.callback("📅 Renovar Assinatura", `cmd_renew_${id}`)],
                 [Markup.button.callback(t.is_active ? "🚫 Bloquear" : "✅ Desbloquear", `cmd_toggle_active_${id}`)],
                 [Markup.button.callback("🔙 Voltar", "list_tenants")]
@@ -746,7 +807,7 @@ if (MASTER_TOKEN) {
     masterBot.action(/cmd_price_(.+)/, async (ctx) => {
         const id = ctx.match[1];
         masterSessions.set(ctx.chat.id, { stage: "WAIT_PRICE_VALUE", data: { id } });
-        await ctx.reply(`💲 <b>Alterar Preço (Cliente ID ${id})</b>\n\nDigite o novo valor (ex: 99.90):`, { parse_mode: "HTML" });
+        await ctx.reply(`💲 <b>Alterar Preço Fixo (Cliente ID ${id})</b>\n\nDigite o novo valor (ex: 99.90).\nPara voltar ao global, digite 0.`, { parse_mode: "HTML" });
     });
 
     // 2. RENOVAR
@@ -835,15 +896,31 @@ if (MASTER_TOKEN) {
             return ctx.reply(`✅ <b>Sucesso!</b>\nCliente <b>${data.name}</b> criado.`);
         }
 
-        // --- WIZARD: ALTERAR PREÇO ---
+        // --- WIZARD: ALTERAR PREÇO FIXO ---
         if (session.stage === "WAIT_PRICE_VALUE") {
             const price = parseFloat(text.replace(",", "."));
             if (isNaN(price)) return ctx.reply("❌ Valor inválido. Digite um número (ex: 99.90).");
 
-            await supabase.from('tenants').update({ subscription_price: price }).eq('id', session.data.id);
+            // Se for 0, remove o preço customizado (null)
+            const finalPrice = price === 0 ? null : price;
+
+            await supabase.from('tenants').update({ subscription_price: finalPrice }).eq('id', session.data.id);
             masterSessions.delete(ctx.chat.id);
             loadTenants();
-            return ctx.reply(`✅ Preço atualizado para <b>R$ ${price.toFixed(2)}</b>`, { parse_mode: "HTML" });
+            return ctx.reply(`✅ Preço atualizado para <b>${finalPrice ? "R$ " + finalPrice.toFixed(2) : "PADRÃO (Global)"}</b>`, { parse_mode: "HTML" });
+        }
+
+        // --- WIZARD: ALTERAR PREÇO GLOBAL ---
+        if (session.stage === "WAIT_GLOBAL_PRICE") {
+            const price = parseFloat(text.replace(",", "."));
+            if (isNaN(price)) return ctx.reply("❌ Valor inválido.");
+
+            const { error } = await supabase.from('system_config').upsert({ key: 'default_price', value: String(price) });
+
+            if (error) return ctx.reply(`❌ Erro: ${error.message}`);
+
+            masterSessions.delete(ctx.chat.id);
+            return ctx.reply(`✅ <b>Preço Global Atualizado!</b>\nNovo valor: R$ ${price.toFixed(2)}\n\n(Clientes sem preço fixo pagarão este valor na próxima renovação).`, { parse_mode: "HTML" });
         }
 
         // --- WIZARD: RENOVAR ---
