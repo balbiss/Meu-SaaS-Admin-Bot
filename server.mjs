@@ -39,6 +39,41 @@ const WUZAPI_BASE_URL = process.env.WUZAPI_BASE_URL || "http://localhost:8080";
 const WUZAPI_ADMIN_TOKEN = process.env.WUZAPI_ADMIN_TOKEN;
 const WEBHOOK_BASE = (process.env.WEBHOOK_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 
+// -- WUZAPI Handler --
+async function callWuzapi(endpoint, method = "GET", body = null, userToken = null) {
+    const headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    };
+
+    if (userToken) {
+        headers["token"] = userToken;
+    } else {
+        headers["Authorization"] = WUZAPI_ADMIN_TOKEN;
+    }
+
+    try {
+        const options = { method, headers };
+        if (body) options.body = JSON.stringify(body);
+
+        const url = `${WUZAPI_BASE_URL}${endpoint}`;
+        const resp = await fetch(url, options);
+        let data = { success: false };
+        try {
+            data = await resp.json();
+        } catch (je) {
+            const text = await resp.text();
+            console.log(`[WUZAPI ERR] No JSON from ${endpoint}: ${text.substring(0, 50)}`);
+            return { error: true, text, success: false };
+        }
+
+        return data;
+    } catch (e) {
+        console.log(`[WUZAPI FATAL] ${method} ${endpoint}: ${e.message}`);
+        return { error: true, message: e.message, success: false };
+    }
+}
+
 // -- Credenciais MESTRE (Para receber pagamentos das assinaturas) --
 const MASTER_SYNCPAY_ID = process.env.SYNCPAY_MASTER_ID;
 const MASTER_SYNCPAY_SECRET = process.env.SYNCPAY_MASTER_SECRET;
@@ -591,8 +626,63 @@ async function startTenantBot(tenant) {
         await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
     }
 
-    // --- USER ACTIONS PLACEHOLDERS ---
-    bot.action("cmd_instancias_menu", (ctx) => ctx.reply("🚀 Menu de Instâncias em breve!"));
+    // --- ACTIONS: Gestão de Instâncias (Wuzapi) ---
+
+    // 1. Menu de Instâncias
+    async function showInstances(ctx) {
+        const session = await getSession(ctx.tenant.id, ctx.chat.id);
+        const instances = session.whatsapp?.instances || [];
+
+        let text = "🚀 <b>Minhas Instâncias de WhatsApp</b>\n\n";
+
+        if (instances.length === 0) {
+            text += "Você ainda não conectou nenhum número.";
+        } else {
+            text += "<b>Suas instâncias conectadas:</b>\n\n";
+            for (const inst of instances) {
+                // Check status rapidinho
+                const statusRes = await callWuzapi(`/session/status`, "GET", null, inst.token);
+                const isOnline = statusRes.success && (statusRes.data?.loggedIn || statusRes.data?.status === "LoggedIn");
+                const statusIcon = isOnline ? "✅" : "🔴";
+
+                text += `${statusIcon} <b>${inst.name}</b>\n`;
+                text += `ID: <code>${inst.id}</code>\n`;
+                text += `Status: ${isOnline ? "Conectado" : "Desconectado"}\n\n`;
+            }
+        }
+
+        const buttons = [];
+        instances.forEach(inst => {
+            buttons.push([Markup.button.callback(`⚙️ Gerenciar ${inst.name}`, `inst_manage_${inst.id}`)]);
+        });
+
+        const max = session.whatsapp?.maxInstances || 1;
+        if (instances.length < max) {
+            buttons.push([Markup.button.callback("➕ Conectar Novo Número", "inst_add_new")]);
+        } else {
+            text += `\n⚠️ <i>Você atingiu o limite de ${max} instâncias.</i>`;
+        }
+
+        buttons.push([Markup.button.callback("🔙 Voltar", "start")]);
+        await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
+    }
+
+    bot.action("cmd_instancias_menu", async (ctx) => {
+        await showInstances(ctx);
+    });
+
+    // 2. Iniciar Fluxo de Conexão
+    bot.action("inst_add_new", async (ctx) => {
+        const session = await getSession(ctx.tenant.id, ctx.chat.id);
+        session.stage = "WA_WAITING_NAME";
+        await saveSession(ctx.tenant.id, ctx.chat.id, session);
+
+        await safeEdit(ctx,
+            "🔗 <b>Nova Conexão</b>\n\nDigite um <b>Nome</b> para identificar esta instância (ex: Vendas, Suporte):",
+            Markup.inlineKeyboard([[Markup.button.callback("❌ Cancelar", "cmd_instancias_menu")]])
+        );
+    });
+
     bot.action("cmd_shortcuts_disparos", (ctx) => ctx.reply("📢 Menu de Disparos em breve!"));
     bot.action("cmd_afiliados", (ctx) => ctx.reply("🤝 Área de Afiliados em breve!"));
     bot.action("cmd_planos_menu", (ctx) => ctx.reply("💎 Área de Planos em breve!"));
@@ -613,15 +703,84 @@ async function startTenantBot(tenant) {
         ctx.reply(`🆔 ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
     });
 
-    // -- Lógica de Chat da IA --
+    // -- Lógica de Chat da IA & Wizards --
     bot.on("text", async (ctx) => {
-        // Ignorar se estiver em uma "sessão" de wizard (Owner)
-        if (ctx.session?.stage && ctx.session.stage !== "READY") return;
+        // 1. Processar Wizards (Sessão)
+        if (ctx.session?.stage && ctx.session.stage !== "READY") {
+            const stage = ctx.session.stage;
+            const text = ctx.message.text.trim();
 
-        // Se for comando, ignora (já tratado)
+            if (stage === "WA_WAITING_NAME") {
+                await ctx.reply("⏳ Criando instância e gerando QR Code...");
+
+                // --- Lógica Wuzapi ---
+                const newInstId = `user_${ctx.chat.id}_${Date.now()}`;
+
+                // 1. Criar Usuário Wuzapi (Sandbox para este cliente)
+                const createRes = await callWuzapi("/admin/users", "POST", {
+                    name: `User ${ctx.chat.id}`,
+                    email: `user${ctx.chat.id}_${Date.now()}@venux.com`, // Email único
+                    password: "user123",
+                    webhook: `${WEBHOOK_BASE}/webhook/wuzapi/${ctx.tenant.id}/${ctx.chat.id}`,
+                    events: "All",
+                    limits: { max_instances: 1 } // Por enquanto 1 por sub-usuário
+                });
+
+                if (createRes.error) {
+                    ctx.session.stage = "READY";
+                    await ctx.save();
+                    return ctx.reply(`❌ Erro ao comunicar com API: ${createRes.message}`);
+                }
+
+                const userToken = createRes.data?.token;
+                const userId = createRes.data?.id;
+
+                if (!userToken) return ctx.reply("❌ Erro: Token não retornado pela API.");
+
+                // 2. Criar Instância
+                await callWuzapi("/instance/init", "POST", {
+                    instanceName: newInstId,
+                    token: userToken,
+                    webhook: `${WEBHOOK_BASE}/webhook/wuzapi/${ctx.tenant.id}/${ctx.chat.id}`
+                }, userToken);
+
+                // 3. Gerar QR Code
+                const qrRes = await callWuzapi(`/instance/connect/${newInstId}`, "GET", null, userToken);
+
+                if (qrRes.base64) {
+                    const buf = Buffer.from(qrRes.base64.replace(/^data:image\/png;base64,/, ""), 'base64');
+                    await ctx.replyWithPhoto({ source: buf }, { caption: `📱 <b>Escaneie para conectar: ${text}</b>`, parse_mode: "HTML" });
+
+                    // Salvar na sessão
+                    ctx.session.whatsapp.instances.push({
+                        id: newInstId,
+                        wuzapiId: userId,
+                        token: userToken, // Importante: Guardar token para chamadas futuras
+                        name: text,
+                        isConnected: false
+                    });
+
+                    ctx.session.stage = "READY";
+                    await ctx.save();
+                } else if (qrRes.code) {
+                    await ctx.reply(`🔗 Código: <code>${qrRes.code}</code>`, { parse_mode: "HTML" });
+                } else {
+                    ctx.session.stage = "READY";
+                    await ctx.save();
+                    await ctx.reply("❌ Falha ao gerar QR Code. Tente novamente.");
+                }
+                return;
+            }
+
+            // ... Outros wizards (Owner, etc) ...
+        }
+
+        // --- Lógica Original de IA (Se não for wizard) ---
+        // Se for comando, ignora
         if (ctx.message.text.startsWith("/")) return;
 
         const openai = getOpenAI(ctx.tenant);
+        // ... resta da lógica da IA ... (Mantendo código anterior)
 
         // Se não tiver OpenAI configurada
         if (!openai) {
