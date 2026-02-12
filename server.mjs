@@ -428,12 +428,7 @@ async function startTenantBot(tenant) {
             const charge = await generateSubscriptionCharge(ctx.tenant);
 
             const pixCode = charge.qrcode_text;
-            const qrImage = charge.qrcode_image_url;
-
-            // Envia Imagem QR Code
-            if (qrImage) {
-                await ctx.replyWithPhoto(qrImage, { caption: "📱 Escaneie para pagar" });
-            }
+            // const qrImage = charge.qrcode_image_url; // Removido a pedido
 
             // Envia Copia e Cola
             await ctx.reply(
