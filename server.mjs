@@ -381,113 +381,133 @@ async function startTenantBot(tenant) {
     });
 
     // --- MODEL SELECTION ACTIONS ---
-    await ctx.save();
-    await ctx.reply(`✅ <b>IA Configurada!</b>\nModelo: ${modelName}`, { parse_mode: "HTML" });
-    return renderOwnerDashboard(ctx);
-};
+    const saveModel = async (ctx, modelName) => {
+        const key = ctx.session.temp_openai_key;
+        if (!key) return ctx.reply("❌ Sessão expirada. Comece de novo.");
+
+        const { error } = await supabase
+            .from('tenants')
+            .update({
+                openai_api_key: key,
+                openai_model: modelName
+            })
+            .eq('id', ctx.tenant.id);
+
+        if (error) return ctx.reply(`❌ Erro ao salvar: ${error.message}`);
+
+        ctx.session.stage = "READY";
+        ctx.session.temp_openai_key = null;
+        await ctx.save();
+
+        // Atualizar memória
+        ctx.tenant.openai_api_key = key;
+        ctx.tenant.openai_model = modelName;
+
+        await ctx.reply(`✅ <b>IA Configurada!</b>\nModelo: ${modelName}`, { parse_mode: "HTML" });
+        return renderOwnerDashboard(ctx);
     };
 
-// --- RENOVAÇÃO DE ASSINATURA ---
-bot.action("owner_renew_sub", async (ctx) => {
-    if (!isOwner(ctx)) return;
-    await ctx.answerCbQuery("Gerando Pix...");
-    await ctx.reply("⏳ <b>Gerando cobrança...</b> Aguarde um momento.", { parse_mode: "HTML" });
+    // --- RENOVAÇÃO DE ASSINATURA ---
+    bot.action("owner_renew_sub", async (ctx) => {
+        if (!isOwner(ctx)) return;
+        await ctx.answerCbQuery("Gerando Pix...");
+        await ctx.reply("⏳ <b>Gerando cobrança...</b> Aguarde um momento.", { parse_mode: "HTML" });
 
-    try {
-        const charge = await generateSubscriptionCharge(ctx.tenant);
+        try {
+            const charge = await generateSubscriptionCharge(ctx.tenant);
 
-        const pixCode = charge.qrcode_text;
-        const qrImage = charge.qrcode_image_url;
+            const pixCode = charge.qrcode_text;
+            const qrImage = charge.qrcode_image_url;
 
-        // Envia Imagem QR Code
-        if (qrImage) {
-            await ctx.replyWithPhoto(qrImage, { caption: "📱 Escaneie para pagar" });
+            // Envia Imagem QR Code
+            if (qrImage) {
+                await ctx.replyWithPhoto(qrImage, { caption: "📱 Escaneie para pagar" });
+            }
+
+            // Envia Copia e Cola
+            await ctx.reply(
+                `💰 <b>Renovação de Assinatura</b>\n` +
+                `Valor: R$ 49,90\n` +
+                `ID: <code>${charge.id}</code>\n\n` +
+                `Copie o código abaixo e pague no seu banco:`,
+                { parse_mode: "HTML" }
+            );
+            await ctx.reply(`<code>${pixCode}</code>`, { parse_mode: "HTML" });
+
+            await ctx.reply("ℹ️ Assim que o pagamento for confirmado, seu plano será renovado automaticamente por +30 dias.");
+
+        } catch (e) {
+            log(`Erro renovação [${ctx.tenant.name}]: ${e.message}`, "ERROR");
+            await ctx.reply(`❌ Erro ao gerar cobrança: ${e.message}`);
+        }
+    });
+
+    bot.action("set_model_4o_mini", (ctx) => saveModel(ctx, "gpt-4o-mini"));
+    bot.action("set_model_4o", (ctx) => saveModel(ctx, "gpt-4o"));
+    bot.action("set_model_35", (ctx) => saveModel(ctx, "gpt-3.5-turbo"));
+
+
+    bot.start(async (ctx) => {
+        const userFirstName = ctx.from.first_name || "Usuário";
+        const welcomeMsg = `👋 <b>Olá, ${userFirstName}!</b>\n\n` +
+            `Bem-vindo ao sistema de automação de <b>${ctx.tenant.name}</b>.\n` +
+            `\n🆔 Seu ID: <code>${ctx.chat.id}</code>` +
+            `\n🏢 Tenant: ${ctx.tenant.name}`;
+
+        await ctx.reply(welcomeMsg, { parse_mode: "HTML" });
+    });
+
+    bot.command("id", (ctx) => {
+        ctx.reply(`🆔 ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
+    });
+
+    // -- Lógica de Chat da IA --
+    bot.on("text", async (ctx) => {
+        // Ignorar se estiver em uma "sessão" de wizard (Owner)
+        if (ctx.session?.stage && ctx.session.stage !== "READY") return;
+
+        // Se for comando, ignora (já tratado)
+        if (ctx.message.text.startsWith("/")) return;
+
+        const openai = getOpenAI(ctx.tenant);
+
+        // Se não tiver OpenAI configurada
+        if (!openai) {
+            // Se for o dono, avisa como configurar. Se for usuário comum, diz que está em manutenção.
+            if (String(ctx.chat.id) === String(ctx.tenant.owner_chat_id)) {
+                return ctx.reply("⚠️ <b>IA Não Configurada.</b>\nUse /admin para adicionar sua API Key.", { parse_mode: "HTML" });
+            } else {
+                return ctx.reply("🤖 O administrador ainda não ativou minha inteligência.");
+            }
         }
 
-        // Envia Copia e Cola
-        await ctx.reply(
-            `💰 <b>Renovação de Assinatura</b>\n` +
-            `Valor: R$ 49,90\n` +
-            `ID: <code>${charge.id}</code>\n\n` +
-            `Copie o código abaixo e pague no seu banco:`,
-            { parse_mode: "HTML" }
-        );
-        await ctx.reply(`<code>${pixCode}</code>`, { parse_mode: "HTML" });
+        const model = ctx.tenant.openai_model || DEFAULT_MODEL;
 
-        await ctx.reply("ℹ️ Assim que o pagamento for confirmado, seu plano será renovado automaticamente por +30 dias.");
+        try {
+            await ctx.sendChatAction("typing");
 
-    } catch (e) {
-        log(`Erro renovação [${ctx.tenant.name}]: ${e.message}`, "ERROR");
-        await ctx.reply(`❌ Erro ao gerar cobrança: ${e.message}`);
-    }
-});
+            const response = await openai.chat.completions.create({
+                model: model,
+                messages: [
+                    { role: "system", content: "Você é um assistente útil e inteligente." },
+                    { role: "user", content: ctx.message.text }
+                ],
+            });
 
-bot.action("set_model_4o_mini", (ctx) => saveModel(ctx, "gpt-4o-mini"));
-bot.action("set_model_4o", (ctx) => saveModel(ctx, "gpt-4o"));
-bot.action("set_model_35", (ctx) => saveModel(ctx, "gpt-3.5-turbo"));
-
-
-bot.start(async (ctx) => {
-    const userFirstName = ctx.from.first_name || "Usuário";
-    const welcomeMsg = `👋 <b>Olá, ${userFirstName}!</b>\n\n` +
-        `Bem-vindo ao sistema de automação de <b>${ctx.tenant.name}</b>.\n` +
-        `\n🆔 Seu ID: <code>${ctx.chat.id}</code>` +
-        `\n🏢 Tenant: ${ctx.tenant.name}`;
-
-    await ctx.reply(welcomeMsg, { parse_mode: "HTML" });
-});
-
-bot.command("id", (ctx) => {
-    ctx.reply(`🆔 ID: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" });
-});
-
-// -- Lógica de Chat da IA --
-bot.on("text", async (ctx) => {
-    // Ignorar se estiver em uma "sessão" de wizard (Owner)
-    if (ctx.session?.stage && ctx.session.stage !== "READY") return;
-
-    // Se for comando, ignora (já tratado)
-    if (ctx.message.text.startsWith("/")) return;
-
-    const openai = getOpenAI(ctx.tenant);
-
-    // Se não tiver OpenAI configurada
-    if (!openai) {
-        // Se for o dono, avisa como configurar. Se for usuário comum, diz que está em manutenção.
-        if (String(ctx.chat.id) === String(ctx.tenant.owner_chat_id)) {
-            return ctx.reply("⚠️ <b>IA Não Configurada.</b>\nUse /admin para adicionar sua API Key.", { parse_mode: "HTML" });
-        } else {
-            return ctx.reply("🤖 O administrador ainda não ativou minha inteligência.");
+            ctx.reply(response.choices[0].message.content);
+        } catch (e) {
+            log(`Erro OpenAI [${ctx.tenant.name}]: ${e.message}`, "ERROR");
+            ctx.reply("❌ Ocorreu um erro ao processar sua mensagem.");
         }
-    }
+    });
 
-    const model = ctx.tenant.openai_model || DEFAULT_MODEL;
+    bot.launch().then(() => {
+        log(`Bot Online! 🚀`, tenant.name);
+    }).catch(err => {
+        log(`Erro ao iniciar bot: ${err.message}`, tenant.name);
+    });
 
-    try {
-        await ctx.sendChatAction("typing");
-
-        const response = await openai.chat.completions.create({
-            model: model,
-            messages: [
-                { role: "system", content: "Você é um assistente útil e inteligente." },
-                { role: "user", content: ctx.message.text }
-            ],
-        });
-
-        ctx.reply(response.choices[0].message.content);
-    } catch (e) {
-        log(`Erro OpenAI [${ctx.tenant.name}]: ${e.message}`, "ERROR");
-        ctx.reply("❌ Ocorreu um erro ao processar sua mensagem.");
-    }
-});
-
-bot.launch().then(() => {
-    log(`Bot Online! 🚀`, tenant.name);
-}).catch(err => {
-    log(`Erro ao iniciar bot: ${err.message}`, tenant.name);
-});
-
-activeBots.set(tenant.id, bot);
+    activeBots.set(tenant.id, bot);
 }
 
 // -- Loaders --
