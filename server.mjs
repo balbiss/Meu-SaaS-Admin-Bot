@@ -133,19 +133,21 @@ async function generateSubscriptionCharge(tenant) {
     const expiryMinutes = 60; // 1 hora para pagar
 
     // 1. Auth no SyncPay (Como MESTRE)
-    const authDesc = Buffer.from(`${MASTER_SYNCPAY_ID}:${MASTER_SYNCPAY_SECRET}`).toString('base64');
-    const tokenRes = await fetch("https://api.syncpayments.com.br/oauth/token", {
+    // Documentação sugere: POST /api/partner/v1/auth-token
+    const tokenRes = await fetch("https://api.syncpayments.com.br/api/partner/v1/auth-token", {
         method: "POST",
         headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": `Basic ${authDesc}`
+            "Content-Type": "application/json"
         },
-        body: new URLSearchParams({ grant_type: "client_credentials" })
+        body: JSON.stringify({
+            client_id: MASTER_SYNCPAY_ID,
+            client_secret: MASTER_SYNCPAY_SECRET
+        })
     });
 
     if (!tokenRes.ok) {
         const errText = await tokenRes.text();
-        throw new Error(`Falha Auth Master (${tokenRes.status}): ${errText}`);
+        throw new Error(`Falha Auth Master (${tokenRes.status}): ${errText.substring(0, 500)}...`);
     }
     const { access_token } = await tokenRes.json();
 
