@@ -569,25 +569,38 @@ app.post("/admin/create-tenant", async (req, res) => {
 });
 
 // -- Webhook MESTRE (Recebe pagamentos das assinaturas) --
+// -- Webhook MESTRE (Recebe pagamentos das assinaturas) --
 app.post("/webhook/master", async (req, res) => {
-    const { id, type, status, charges, external_id } = req.body;
+    // SyncPay envia o payload dentro de "data"
+    const payload = req.body.data || req.body;
+    const { id, status, client } = payload;
 
-    log(`[Webhook Master] Recebido: ${type} | Status: ${status} | ExtID: ${external_id}`, "SYSTEM");
+    log(`[Webhook Master] Recebido! Status: ${status} | ID: ${id}`, "SYSTEM");
 
-    // Verificar se é uma assinatura (SUB_)
-    if (!external_id || !external_id.startsWith("SUB_")) {
-        return res.json({ ignored: true, reason: "Not a subscription payment" });
+    // Verificar status de sucesso (SyncPay usa 'completed' para Pix pago)
+    // Aceitamos PAID, RECEIVED (outros gateways) ou COMPLETED (SyncPay)
+    if (status !== "completed" && status !== "PAID" && status !== "RECEIVED") {
+        return res.json({ ignored: true, reason: `Status ${status} not eligible` });
     }
 
-    // Verificar se foi pago
-    if (status !== "PAID" && status !== "RECEIVED") {
-        return res.json({ ignored: true, reason: "Status not PAID" });
+    // Tentar extrair Tenant ID do Email do Cliente (estratégia sem banco)
+    // Email enviado: "tenant_{ID}@venux.com"
+    let tenantId = null;
+    if (client && client.email) {
+        const match = client.email.match(/tenant_(\d+)@/);
+        if (match) tenantId = match[1];
     }
 
-    const tenantIdPromise = external_id.split("SUB_")[1];
-    if (!tenantIdPromise) return res.status(400).json({ error: "Invalid External ID" });
+    // Fallback: Tentar external_id (se enviado no futuro)
+    if (!tenantId && payload.external_id && payload.external_id.startsWith("SUB_")) {
+        tenantId = payload.external_id.split("SUB_")[1];
+    }
 
-    const tenantId = tenantIdPromise;
+    if (!tenantId) {
+        log(`[Webhook Master] ID do Tenant não identificado no payload.`, "ERROR");
+        console.log("Payload recebido:", JSON.stringify(payload, null, 2));
+        return res.status(400).json({ error: "Tenant ID not found in payload" });
+    }
 
     try {
         // 1. Buscar Tenant Atual
@@ -598,7 +611,7 @@ app.post("/webhook/master", async (req, res) => {
             .single();
 
         if (fetchError || !tenant) {
-            log(`[Webhook Master] Tenant não encontrado: ${tenantId}`, "ERROR");
+            log(`[Webhook Master] Tenant não encontrado no Banco: ${tenantId}`, "ERROR");
             return res.status(404).json({ error: "Tenant not found" });
         }
 
@@ -620,7 +633,7 @@ app.post("/webhook/master", async (req, res) => {
             })
             .eq('id', tenantId);
 
-        log(`[Webhook Master] Assinatura renovada para Tenant ${tenant.name} até ${newExpiration}`, "SYSTEM");
+        log(`[Webhook Master] 💰 Assinatura renovada! Tenant: ${tenant.name} (${tenant.id}) até ${new Date(newExpiration).toLocaleDateString("pt-BR")}`, "SYSTEM");
 
         // 4. Notificar via Telegram (Se bot estiver rodando)
         if (activeBots.has(tenant.id)) {
