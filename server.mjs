@@ -308,9 +308,12 @@ if (MASTER_TOKEN) {
 
     // Middleware de Segurança (Só você pode usar)
     masterBot.use((ctx, next) => {
+        // Permitir descobrir o ID mesmo sem configurar
+        if (ctx.message?.text === '/meu_id') return next();
+
         // Se MASTER_ADMIN_ID não estiver configurado, avisa no log e ignora
         if (!MASTER_ADMIN_ID) {
-            return ctx.reply("⚠️ ADMIN_ID não configurado no .env. Configure para usar este bot.");
+            return ctx.reply("⚠️ ADMIN_ID não configurado no .env. Configure para usar este bot.\nUse /meu_id para descobrir o seu.");
         }
         if (String(ctx.chat.id) !== String(MASTER_ADMIN_ID)) {
             log(`Acesso negado ao Master Bot: ${ctx.chat.id}`, "SECURITY");
