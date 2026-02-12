@@ -152,7 +152,8 @@ async function generateSubscriptionCharge(tenant) {
     const { access_token } = await tokenRes.json();
 
     // 2. Gerar Cobrança Pix
-    const chargeRes = await fetch("https://api.syncpayments.com.br/v1/billing/pix", {
+    // Tentativa com endpoint Cash-In
+    const chargeRes = await fetch("https://api.syncpayments.com.br/api/partner/v1/pix/cash-in", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -177,7 +178,7 @@ async function generateSubscriptionCharge(tenant) {
 
     if (!chargeRes.ok) {
         const err = await chargeRes.text();
-        throw new Error(`Erro ao gerar Pix: ${err}`);
+        throw new Error(`Erro ao gerar Pix: ${err.substring(0, 500)}...`);
     }
 
     return await chargeRes.json(); // Retorna { qrcode_text, qrcode_image_url, etc }
