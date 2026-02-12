@@ -64,6 +64,20 @@ function log(msg, tenantName = "SYSTEM") {
     try { fs.appendFileSync("saas_server.log", logMsg + "\n"); } catch (e) { }
 }
 
+async function safeEdit(ctx, text, extra = {}) {
+    if (ctx.callbackQuery) {
+        try {
+            await ctx.editMessageText(text, { parse_mode: "HTML", ...extra });
+        } catch (e) {
+            // Se conteúdo for igual ou outro erro, tenta deletar e reenviar limpo
+            try { await ctx.deleteMessage(); } catch (delErr) { }
+            await ctx.reply(text, { parse_mode: "HTML", ...extra });
+        }
+    } else {
+        await ctx.reply(text, { parse_mode: "HTML", ...extra });
+    }
+}
+
 // -- Persistence Layer (Multi-Tenant) --
 const sessionCache = new Map(); // "tenantId_chatId" -> { data, timestamp }
 const CACHE_TTL = 5 * 60 * 1000;
@@ -574,7 +588,7 @@ async function startTenantBot(tenant) {
             buttons.push([Markup.button.callback("👑 Painel Admin (Dono)", "owner_menu")]);
         }
 
-        await ctx.reply(text, { parse_mode: "HTML", ...Markup.inlineKeyboard(buttons) });
+        await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
     }
 
     // --- USER ACTIONS PLACEHOLDERS ---
