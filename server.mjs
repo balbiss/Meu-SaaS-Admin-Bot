@@ -152,21 +152,27 @@ async function generateSubscriptionCharge(tenant) {
     const { access_token } = await tokenRes.json();
 
     // 2. Gerar Cobrança Pix
-    // Tentativa endpoint padrão: POST /api/v1/pix
-    const chargeUrl = "https://api.syncpayments.com.br/api/v1/pix/orders";
+    // Endpoint oficial: POST /api/partner/v1/cash-in
+    const chargeUrl = "https://api.syncpayments.com.br/api/partner/v1/cash-in";
     log(`Gerando Pix em: ${chargeUrl}`);
 
     const chargeRes = await fetch(chargeUrl, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${access_token}`
+            "Authorization": `Bearer ${access_token}`,
+            "Accept": "application/json"
         },
         body: JSON.stringify({
-            amount: Math.round(price * 100), // centavos
+            amount: price, // Valor float (ex: 49.90)
             description: `Renovação SaaS - ${tenant.name}`,
-            external_id: `SUB_${tenant.id}`,
-            expiration: expiryMinutes * 60
+            webhook_url: `${WEBHOOK_BASE}/webhook/master`, // Webhook do Mestre
+            client: {
+                name: tenant.name,
+                email: `tenant_${tenant.id}@venux.com`,
+                phone: "11999999999", // Placeholder, obrigatório 10-11 digitos
+                cpf: "00000000000"    // Placeholder, obrigatório 11 digitos
+            }
         })
     });
 
@@ -175,7 +181,13 @@ async function generateSubscriptionCharge(tenant) {
         throw new Error(`Erro ao gerar Pix: ${err.substring(0, 500)}...`);
     }
 
-    return await chargeRes.json(); // Retorna { qrcode_text, qrcode_image_url, etc }
+    const data = await chargeRes.json();
+    // Retorna formato unificado
+    return {
+        id: data.identifier,
+        qrcode_text: data.pix_code,
+        qrcode_image_url: null // API não retorna imagem direta, apenas o código
+    };
 }
 
 // -- SaaS Bot Factory --
