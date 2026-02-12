@@ -129,6 +129,26 @@ async function getGlobalPrice() {
     return data ? parseFloat(data.value) : 90.90;
 }
 
+// Helper para contar usuários únicos (instances)
+async function getTenantUserCount(tenantId) {
+    const { count, error } = await supabase
+        .from('bot_sessions')
+        .select('chat_id', { count: 'exact', head: true })
+        .eq('tenant_id', tenantId);
+    return error ? 0 : count;
+}
+
+// Helper para verificar se usuário já existe
+async function checkUserExists(tenantId, chatId) {
+    const { data } = await supabase
+        .from('bot_sessions')
+        .select('chat_id')
+        .eq('tenant_id', tenantId)
+        .eq('chat_id', String(chatId))
+        .single();
+    return !!data;
+}
+
 // -- Helper de Pagamento MESTRE (Renovação) --
 async function generateSubscriptionCharge(tenant) {
     if (!MASTER_SYNCPAY_ID || !MASTER_SYNCPAY_SECRET) {
@@ -137,26 +157,6 @@ async function generateSubscriptionCharge(tenant) {
     const defaultPrice = await getGlobalPrice();
     const price = tenant.subscription_price || defaultPrice;
     const expiryMinutes = 60; // 1 hora para pagar
-
-    // Helper para contar usuários únicos (instances)
-    async function getTenantUserCount(tenantId) {
-        const { count, error } = await supabase
-            .from('bot_sessions')
-            .select('chat_id', { count: 'exact', head: true })
-            .eq('tenant_id', tenantId);
-        return error ? 0 : count;
-    }
-
-    // Helper para verificar se usuário já existe
-    async function checkUserExists(tenantId, chatId) {
-        const { data } = await supabase
-            .from('bot_sessions')
-            .select('chat_id')
-            .eq('tenant_id', tenantId)
-            .eq('chat_id', String(chatId))
-            .single();
-        return !!data;
-    }
 
     // 1. Auth no SyncPay (Como MESTRE)
     // Documentação sugere: POST /api/partner/v1/auth-token
@@ -783,16 +783,19 @@ if (MASTER_TOKEN) {
         const vcto = t.expiration_date ? new Date(t.expiration_date).toLocaleDateString('pt-BR') : "Sem data";
         const price = t.subscription_price ? `R$ ${t.subscription_price.toFixed(2)} (Fixo)` : `Padrão (Global)`;
         const status = t.is_active ? "Ativo" : "Bloqueado";
+        const limits = t.max_users || 10;
 
         const msg = `🏢 <b>Cliente:</b> ${t.name}\n` +
             `🆔 ID: ${t.id}\n` +
             `📊 Status: ${status}\n` +
+            `👥 Usuários: ${limits} max\n` +
             `💲 Preço: ${price}\n` +
             `📅 Vence em: ${vcto}`;
 
         await ctx.editMessageText(msg, {
             parse_mode: "HTML",
             ...Markup.inlineKeyboard([
+                [Markup.button.callback("👥 Alterar Limite", `cmd_limit_${id}`)],
                 [Markup.button.callback("💲 Definir Preço Fixo", `cmd_price_${id}`)],
                 [Markup.button.callback("📅 Renovar Assinatura", `cmd_renew_${id}`)],
                 [Markup.button.callback(t.is_active ? "🚫 Bloquear" : "✅ Desbloquear", `cmd_toggle_active_${id}`)],
@@ -802,6 +805,13 @@ if (MASTER_TOKEN) {
     });
 
     // --- AÇÕES DO CLIENTE (Wizards) ---
+
+    // 0. LIMITE DE USUÁRIOS
+    masterBot.action(/cmd_limit_(.+)/, async (ctx) => {
+        const id = ctx.match[1];
+        masterSessions.set(ctx.chat.id, { stage: "WAIT_LIMIT_VALUE", data: { id } });
+        await ctx.reply(`👥 <b>Alterar Limite de Usuários (Cliente ID ${id})</b>\n\nDigite o novo número máximo de usuários (ex: 50):`, { parse_mode: "HTML" });
+    });
 
     // 1. PREÇO
     masterBot.action(/cmd_price_(.+)/, async (ctx) => {
@@ -894,6 +904,25 @@ if (MASTER_TOKEN) {
             startTenantBot(data);
             masterSessions.delete(ctx.chat.id);
             return ctx.reply(`✅ <b>Sucesso!</b>\nCliente <b>${data.name}</b> criado.`);
+        }
+
+        // --- WIZARD: ALTERAR LIMITE ---
+        if (session.stage === "WAIT_LIMIT_VALUE") {
+            const limit = parseInt(text);
+            if (isNaN(limit)) return ctx.reply("❌ Valor inválido. Digite um número inteiro.");
+
+            await supabase.from('tenants').update({ max_users: limit }).eq('id', session.data.id);
+
+            // Atualizar tenant em memória se estiver rodando
+            if (activeBots.has(parseInt(session.data.id))) {
+                // Reiniciar para pegar limite novo
+                const { data: updatedTenant } = await supabase.from('tenants').select('*').eq('id', session.data.id).single();
+                startTenantBot(updatedTenant);
+            }
+
+            masterSessions.delete(ctx.chat.id);
+            loadTenants();
+            return ctx.reply(`✅ Limite atualizado para <b>${limit} usuários</b>`, { parse_mode: "HTML" });
         }
 
         // --- WIZARD: ALTERAR PREÇO FIXO ---
