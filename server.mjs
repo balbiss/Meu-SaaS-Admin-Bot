@@ -163,7 +163,12 @@ async function startTenantBot(tenant) {
         if (!isOwner(ctx)) return;
 
         const tenant = ctx.tenant;
-        const status = tenant.is_active ? "✅ Ativo" : "❌ Inativo";
+
+        let status = tenant.is_active ? "✅ Ativo" : "❌ Inativo (Banido)";
+        if (tenant.expiration_date && new Date() > new Date(tenant.expiration_date)) {
+            status = "🚫 Vencido (Bloqueado)";
+        }
+
         const syncPayStatus = (tenant.syncpay_client_id && tenant.syncpay_client_secret) ? "✅ Configurado" : "⚠️ Pendente";
 
         // Status da IA
