@@ -713,11 +713,12 @@ if (MASTER_TOKEN) {
     });
 
     // --- DETALHES DO CLIENTE ---
-    masterBot.action(/manage_tenant_(\d+)/, async (ctx) => {
+    masterBot.action(/manage_tenant_(.+)/, async (ctx) => {
         const id = ctx.match[1];
+        console.log(`[DEBUG] Manage Tenant ID: ${id}`);
         const { data: t } = await supabase.from('tenants').select('*').eq('id', id).single();
 
-        if (!t) return ctx.reply("Cliente não encontrado.");
+        if (!t) return ctx.reply(`Cliente não encontrado (ID: ${id}).`);
 
         const vcto = t.expiration_date ? new Date(t.expiration_date).toLocaleDateString('pt-BR') : "Sem data";
         const price = t.subscription_price || 49.90;
@@ -743,21 +744,21 @@ if (MASTER_TOKEN) {
     // --- AÇÕES DO CLIENTE (Wizards) ---
 
     // 1. PREÇO
-    masterBot.action(/cmd_price_(\d+)/, async (ctx) => {
+    masterBot.action(/cmd_price_(.+)/, async (ctx) => {
         const id = ctx.match[1];
         masterSessions.set(ctx.chat.id, { stage: "WAIT_PRICE_VALUE", data: { id } });
         await ctx.reply(`💲 <b>Alterar Preço (Cliente ID ${id})</b>\n\nDigite o novo valor (ex: 99.90):`, { parse_mode: "HTML" });
     });
 
     // 2. RENOVAR
-    masterBot.action(/cmd_renew_(\d+)/, async (ctx) => {
+    masterBot.action(/cmd_renew_(.+)/, async (ctx) => {
         const id = ctx.match[1];
         masterSessions.set(ctx.chat.id, { stage: "WAIT_RENEW_DAYS", data: { id } });
         await ctx.reply(`📅 <b>Renovar Assinatura (Cliente ID ${id})</b>\n\nDigite quantos dias deseja adicionar (ex: 30):`, { parse_mode: "HTML" });
     });
 
     // 3. BLOQUEAR/DESBLOQUEAR (Toggle)
-    masterBot.action(/cmd_toggle_active_(\d+)/, async (ctx) => {
+    masterBot.action(/cmd_toggle_active_(.+)/, async (ctx) => {
         const id = ctx.match[1];
         const { data: t } = await supabase.from('tenants').select('is_active, name').eq('id', id).single();
         const newState = !t.is_active;
